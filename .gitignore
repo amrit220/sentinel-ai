@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Runtime artifacts (local databases, generated reports, logs)
+data/
+demo_target/sentinel_demo.db
+*.log
+*.err
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
