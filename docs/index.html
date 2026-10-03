@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sentinel AI — Autonomous Security & QA Platform (Demo)</title>
+<meta name="description" content="AI-powered autonomous QA engineer & ethical hacking platform — interactive demo">
+<link rel="stylesheet" href="styles.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#128737;</text></svg>">
+</head>
+<body>
+
+<div class="app">
+  <!-- ============================ SIDEBAR ============================ -->
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark">&#128737;</div>
+      <div>
+        <div class="brand-name">SENTINEL<span class="accent">AI</span></div>
+        <div class="brand-sub">autonomous security & QA</div>
+      </div>
+    </div>
+    <nav>
+      <a href="#/dashboard" data-nav="dashboard" class="nav-item">
+        <span class="ico">&#9632;</span> Dashboard</a>
+      <a href="#/scan" data-nav="scan" class="nav-item">
+        <span class="ico">&#9889;</span> New Scan</a>
+      <a href="#/scans" data-nav="scans" class="nav-item">
+        <span class="ico">&#128269;</span> Scans & Results</a>
+      <a href="#/reports" data-nav="reports" class="nav-item">
+        <span class="ico">&#128196;</span> Reports</a>
+      <a href="#/monitor" data-nav="monitor" class="nav-item">
+        <span class="ico">&#128257;</span> Monitoring
+        <span id="alertBadge" class="badge hidden">0</span></a>
+      <a href="#/learn" data-nav="learn" class="nav-item">
+        <span class="ico">&#127891;</span> Learning</a>
+    </nav>
+    <div class="sidebar-foot">
+      <div id="aiBackend" class="pill"></div>
+      <div class="foot-note">authorized testing only</div>
+    </div>
+  </aside>
+
+  <!-- ============================ MAIN ============================== -->
+  <main class="main">
+    <header class="topbar">
+      <h1 id="pageTitle">Dashboard</h1>
+      <div class="topbar-right">
+        <span id="healthDot" class="dot"></span><span id="healthTxt">connecting…</span>
+      </div>
+    </header>
+    <section id="view" class="view"><!-- SPA view rendered here --></section>
+  </main>
+</div>
+
+<!-- ============================ MODAL SHELL ============================ -->
+<div id="modal" class="modal hidden">
+  <div class="modal-backdrop" onclick="UI.closeModal()"></div>
+  <div class="modal-card" id="modalCard"></div>
+</div>
+
+<div id="toasts" class="toasts"></div>
+
+<!-- api.js/charts.js load first; demo-data.js + demo.js patch the API layer
+     with embedded real scan data; app.js (the SPA) boots against the mock. -->
+<script src="js/api.js"></script>
+<script src="js/charts.js"></script>
+<script src="js/demo-data.js"></script>
+<script src="js/demo.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
