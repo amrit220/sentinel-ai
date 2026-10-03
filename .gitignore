@@ -15,3 +15,6 @@ demo_target/sentinel_demo.db
 Thumbs.db
 .idea/
 .vscode/
+
+sentinel_demo.db
+opencode.json
