@@ -33,6 +33,20 @@ def run_scan(scan_id):
     db.update_scan(scan_id, status="running", stage="discovery", progress=5,
                    started_at=_now())
 
+    # 0. reachability check ----------------------------------------------
+    reach = scanner.http("GET", base_url, timeout=5)
+    if reach["status"] == 0:  # 0 = network-level failure (refused/DNS/timeout)
+        hint = ""
+        if base_url.rstrip("/").endswith(":5099"):
+            hint = (" If you intended to scan the bundled demo target, launch Sentinel "
+                    "with:  python app.py --with-demo")
+        db.update_scan(scan_id, status="failed", stage="unreachable",
+                       error=(f"Target {base_url} is unreachable ({reach.get('error')}). "
+                              "Verify the URL, that the service is running, and that it "
+                              f"is network-reachable from this machine.{hint}"),
+                       finished_at=_now())
+        return
+
     try:
         # 1. discovery -----------------------------------------------------
         endpoints, discovery_mode = scanner.discover_endpoints(

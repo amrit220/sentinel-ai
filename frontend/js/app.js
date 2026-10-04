@@ -209,9 +209,16 @@ async function pageScan(_arg, view) {
   perf.addEventListener('change', () => view.querySelector('#perfCfg').classList.toggle('hidden', !perf.checked));
 }
 
-function useDemo() {
+/** Fill the form with the bundled demo target — and verify it's actually
+    reachable (no-cors ping: succeeds on connect, rejects on refusal). */
+async function useDemo() {
   document.getElementById('scTarget').value = DEMO_URL;
-  UI.toast('Demo target set: ' + DEMO_URL);
+  try {
+    await fetch(DEMO_URL + '/api/health', { mode: 'no-cors' });
+    UI.toast('Demo target set: ' + DEMO_URL);
+  } catch (e) {
+    UI.toast('Demo target NOT running — start it with: python app.py --with-demo', true);
+  }
 }
 
 /** Collect target + module config from the form and POST /api/scans,
