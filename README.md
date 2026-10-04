@@ -202,6 +202,27 @@ weighted severities (critical 22 · high 12 · medium 6 · low 2.5) with exploit
 penalty; performance from p50/p95 + error rate; quality from test pass-rate; overall =
 `0.6·security + 0.25·performance + 0.15·quality`, with A–F grade and risk-level text.
 
+## 🧪 Testing
+
+```bash
+pip install playwright
+python -m playwright install chromium
+python app.py --with-demo          # backend must be running first (separate terminal)
+python tests/e2e_dashboard.py      # headless browser drives the full UI flow:
+                                  # dashboard -> new scan -> live pipeline -> results
+                                  # -> finding expansion -> attack replay -> reports
+                                  # screenshots land in tests/artifacts/
+```
+
+## 🛠️ Troubleshooting
+
+| Symptom | Cause & fix |
+|---|---|
+| `app.py` crashes with `WinError 10048` / "address already in use" | Another Sentinel instance is already listening on port 5000. Stop it — PowerShell: `Get-Process python \| Stop-Process` — then relaunch. |
+| Scan fails: *"Target ... is unreachable"* | The target URL isn't listening. For the bundled demo you must start Sentinel with `python app.py --with-demo` (demo serves on `:5099`). |
+| Dashboard shows *"backend unreachable"* | Flask isn't serving — check its console output (usually a port conflict). |
+| Demo button warns *"Demo target NOT running"* | Same as above — the button live-pings `:5099` before filling the form. |
+
 ---
 
 ## 🔐 Safety & ethics model
