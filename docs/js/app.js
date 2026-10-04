@@ -21,6 +21,16 @@ const UI = {
   },
 };
 
+/** Mobile drawer: slide the sidebar in/out (>=900px it is always visible). */
+function toggleSidebar(force) {
+  const sb = document.querySelector('.sidebar');
+  const bd = document.querySelector('.sidebar-backdrop');
+  if (!sb) return;
+  const open = force !== undefined ? force : !sb.classList.contains('open');
+  sb.classList.toggle('open', open);
+  if (bd) bd.classList.toggle('show', open);
+}
+
 const DEMO_URL = 'http://127.0.0.1:5099';
 let CURRENT_SCAN = null;   // shared state for results view
 
@@ -38,6 +48,7 @@ const TITLES = { dashboard: 'Dashboard', scan: 'New Scan', scans: 'Scans & Resul
 
 async function route() {
   // '#/dashboard' -> 'dashboard'; '#/results/<id>' -> page + scan id arg
+  toggleSidebar(false);   // close the mobile drawer after navigation
   const hash = location.hash.slice(2) || 'dashboard';
   const [name, arg] = hash.split('/');
   const fn = routes[name] || pageDashboard;

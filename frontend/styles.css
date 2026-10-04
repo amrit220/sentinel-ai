@@ -64,11 +64,67 @@ nav{padding:12px 10px;display:flex;flex-direction:column;gap:2px;flex:1}
 .grid.c4{grid-template-columns:repeat(4,1fr)}
 .grid.c3{grid-template-columns:repeat(3,1fr)}
 .grid.c2{grid-template-columns:repeat(2,1fr)}
-@media(max-width:1100px){.grid.c4,.grid.c3{grid-template-columns:repeat(2,1fr)}}
-@media(max-width:700px){.grid.c4,.grid.c3,.grid.c2{grid-template-columns:1fr}.sidebar{display:none}}
+/* ---------- responsive ---------- */
+/* Hamburger + backdrop (hidden on desktop) */
+.hamburger{
+  display:none;background:var(--panel2);border:1px solid var(--border2);color:var(--acc);
+  border-radius:9px;padding:7px 11px;font-size:16px;cursor:pointer;line-height:1;
+}
+.hamburger:hover{border-color:var(--acc)}
+.sidebar-backdrop{
+  position:fixed;inset:0;z-index:55;background:rgba(4,7,12,.65);backdrop-filter:blur(2px);
+  opacity:0;pointer-events:none;transition:opacity .2s;
+}
+.sidebar-backdrop.show{opacity:1;pointer-events:auto}
+
+/* Tablet: collapse 4/3-col grids; sidebar becomes a slide-in drawer */
+@media(max-width:1100px){
+  .grid.c4,.grid.c3{grid-template-columns:repeat(2,1fr)}
+}
+@media(max-width:900px){
+  .sidebar{
+    position:fixed;left:0;top:0;z-index:60;width:248px;height:100dvh;height:100vh;
+    transform:translateX(-105%);transition:transform .25s ease;
+    box-shadow:30px 0 60px rgba(0,0,0,.55);
+  }
+  .sidebar.open{transform:translateX(0)}
+  .hamburger{display:inline-flex}
+}
+/* Phone: single-column, compact spacing, scrollable tables */
+@media(max-width:640px){
+  .grid.c4,.grid.c3,.grid.c2{grid-template-columns:1fr}
+  .view{padding:14px 12px 90px}
+  .topbar{padding:12px 14px}
+  .topbar h1{font-size:16px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+  .topbar-right .txt{display:none}
+  .card{padding:14px;border-radius:10px}
+  .card.tight{padding:10px 12px}
+  /* tables scroll horizontally instead of breaking the page */
+  .tbl{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch}
+  .tbl th,.tbl td{white-space:nowrap}
+  .finding-head{flex-wrap:wrap;gap:8px}
+  .finding-head .title{flex-basis:100%;order:3}
+  .finding-head .endp{max-width:100%;flex-basis:100%}
+  .finding-body{padding:12px 14px 14px}
+  .score-card{justify-content:center;text-align:center}
+  .modal-card{width:96vw;max-height:90vh;padding:16px;border-radius:12px}
+  .chat-log{max-height:220px}
+  .scanbar{flex-wrap:wrap;gap:8px}
+  .brand-name{font-size:15px}
+  #scProgress .btn{width:100%;justify-content:center}
+  .toasts{left:12px;right:12px;bottom:12px}
+  .toast{min-width:0;width:100%}
+}
+@media(max-width:420px){
+  .grid.c4,.grid.c3,.grid.c2{grid-template-columns:1fr}
+  .finding-head .sev{font-size:9.5px;padding:2px 7px}
+  .demo-banner{white-space:normal!important;text-align:center!important;font-size:11px!important;
+    padding:8px 12px!important;left:12px!important;right:12px!important;
+    transform:none!important;max-width:none!important;bottom:64px!important}
+}
 h2.sect{font-size:14px;text-transform:uppercase;letter-spacing:1.4px;color:var(--dim);margin:26px 0 12px}
 .muted{color:var(--dim)} .small{font-size:12px} .mono{font-family:var(--mono)}
-.row{display:flex;align-items:center;gap:10px} .spread{justify-content:space-between}
+.row{display:flex;align-items:center;gap:10px;flex-wrap:wrap} .spread{justify-content:space-between}
 .mt{margin-top:14px} .mb{margin-bottom:14px}
 
 /* ---------- score donuts ---------- */

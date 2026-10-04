@@ -208,11 +208,15 @@ penalty; performance from p50/p95 + error rate; quality from test pass-rate; ove
 pip install playwright
 python -m playwright install chromium
 python app.py --with-demo          # backend must be running first (separate terminal)
-python tests/e2e_dashboard.py      # headless browser drives the full UI flow:
-                                  # dashboard -> new scan -> live pipeline -> results
-                                  # -> finding expansion -> attack replay -> reports
-                                  # screenshots land in tests/artifacts/
+python tests/e2e_dashboard.py      # full desktop flow: dashboard -> scan -> live
+                                  # pipeline -> results -> attack replay -> reports
+python tests/e2e_mobile.py         # responsive suite: desktop / tablet / phone
+                                  # viewports, drawer navigation, overflow checks
+                                  # screenshots land in tests/artifacts/ (gitignored)
 ```
+
+The UI is fully responsive: persistent sidebar ≥900px, slide-in drawer + hamburger
+below, single-column grids and horizontally scrollable tables on phones.
 
 ## 🛠️ Troubleshooting
 

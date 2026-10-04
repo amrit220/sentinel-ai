@@ -10,6 +10,9 @@ demo_target/sentinel_demo.db
 *.log
 *.err
 
+# Playwright test screenshots (regenerated on every run)
+tests/artifacts/
+
 # OS / editor
 .DS_Store
 Thumbs.db

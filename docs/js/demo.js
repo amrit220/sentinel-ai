@@ -129,6 +129,7 @@ document.addEventListener('click', (ev) => {
 /* --------------------------- demo-mode banner --------------------------- */
 addEventListener('DOMContentLoaded', () => {
   const banner = document.createElement('div');
+  banner.className = 'demo-banner';
   banner.innerHTML = '⚡ <b>STATIC DEMO</b> — real scan data of the bundled demo target · run <span class="mono">python app.py --with-demo</span> for live scanning';
   banner.style.cssText = `position:fixed;bottom:14px;left:50%;transform:translateX(-50%);z-index:90;
     background:rgba(16,22,35,.95);border:1px solid #27354d;border-left:3px solid #ffd23d;

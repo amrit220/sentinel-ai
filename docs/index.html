@@ -41,17 +41,21 @@
     </div>
   </aside>
 
-  <!-- ============================ MAIN ============================== -->
-  <main class="main">
-    <header class="topbar">
-      <h1 id="pageTitle">Dashboard</h1>
-      <div class="topbar-right">
-        <span id="healthDot" class="dot"></span><span id="healthTxt">connecting…</span>
-      </div>
-    </header>
-    <section id="view" class="view"><!-- SPA view rendered here --></section>
-  </main>
-</div>
+    <!-- ============================ MAIN ============================== -->
+    <main class="main">
+      <header class="topbar">
+        <div class="row" style="gap:10px;min-width:0">
+          <button class="hamburger" onclick="toggleSidebar(true)" aria-label="Open menu">&#9776;</button>
+          <h1 id="pageTitle" style="min-width:0">Dashboard</h1>
+        </div>
+        <div class="topbar-right">
+          <span id="healthDot" class="dot"></span><span id="healthTxt" class="txt">connecting…</span>
+        </div>
+      </header>
+      <section id="view" class="view"><!-- SPA view rendered here --></section>
+    </main>
+  </div>
+  <div class="sidebar-backdrop" onclick="toggleSidebar(false)"></div>
 
 <!-- ============================ MODAL SHELL ============================ -->
 <div id="modal" class="modal hidden">
