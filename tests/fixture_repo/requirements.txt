@@ -1,0 +1,4 @@
+# Fixture requirements with known-vulnerable pins (for OSV testing)
+flask==1.1.1
+requests==2.25.0
+pyyaml

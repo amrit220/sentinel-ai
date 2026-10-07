@@ -1,0 +1,15 @@
+name: CI (fixture with INTENTIONAL workflow flaws)
+
+on:
+  pull_request_target:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      # VULN: checks out untrusted fork code inside a secret-bearing workflow
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+      - run: echo "Deploying with ${{ secrets.DEPLOY_TOKEN }}"
