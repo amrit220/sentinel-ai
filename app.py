@@ -47,19 +47,41 @@ def api_list_scans():
 @app.post("/api/scans")
 def api_create_scan():
     data = request.get_json(silent=True) or request.form or {}
-    target = (data.get("target") or "").strip()
-    if not target:
-        return jsonify({"error": "target is required"}), 400
-    cfg = {
-        "openapi": data.get("openapi") or None,
-        "modules": {
-            "functional": bool(data.get("functional", True)),
-            "attacks": bool(data.get("attacks", True)),
-            "performance": bool(data.get("performance", False)),
-        },
-        "perfConcurrency": int(data.get("perfConcurrency", Config.PERF_CONCURRENCY)),
-        "perfDuration": int(data.get("perfDuration", Config.PERF_DURATION_S)),
-    }
+    mode = data.get("mode", "api")
+
+    if mode == "repo":
+        # universal target: GitHub repo URL or a local project folder
+        repo_url = (data.get("repoUrl") or "").strip()
+        local_path = (data.get("localPath") or "").strip()
+        target = repo_url or local_path
+        if not target:
+            return jsonify({"error": "repository URL or local folder path is required"}), 400
+        cfg = {
+            "mode": "repo",
+            "repo_url": repo_url or None,
+            "branch": (data.get("branch") or "").strip() or None,
+            "local_path": local_path or None,
+            "repo_modules": {
+                "deps": bool(data.get("deps", True)),
+                "runtime": bool(data.get("runtime", False)),
+            },
+        }
+    else:
+        target = (data.get("target") or "").strip()
+        if not target:
+            return jsonify({"error": "target is required"}), 400
+        cfg = {
+            "mode": "api",
+            "openapi": data.get("openapi") or None,
+            "modules": {
+                "functional": bool(data.get("functional", True)),
+                "attacks": bool(data.get("attacks", True)),
+                "performance": bool(data.get("performance", False)),
+            },
+            "perfConcurrency": int(data.get("perfConcurrency", Config.PERF_CONCURRENCY)),
+            "perfDuration": int(data.get("perfDuration", Config.PERF_DURATION_S)),
+        }
+
     scan_id = pipeline.start_scan_async(target, data.get("label"), cfg)
     return jsonify({"scan_id": scan_id}), 201
 

@@ -58,11 +58,14 @@ def _score_cards(summary):
     cells = []
     for key, label in (("overall", "Overall"), ("security", "Security"),
                        ("performance", "Performance"), ("quality", "Quality")):
-        v = s.get(key, 0)
+        v = s.get(key)
+        na = v is None
+        shown = "—" if na else v
+        color = "#8b95a5" if na else _score_color(v)
         cells.append(
             f'<div class="card score"><div class="muted">{label}</div>'
-            f'<div class="n" style="color:{_score_color(v)}">{v}</div>'
-            f'<div class="pill">{scoring.grade(v)}</div></div>'
+            f'<div class="n" style="color:{color}">{shown}</div>'
+            f'<div class="pill">{"n/a (static scan)" if na else scoring.grade(v)}</div></div>'
         )
     return f'<div class="grid">{"".join(cells)}</div>'
 
@@ -169,6 +172,19 @@ def generate_client_report(scan, findings, path=None):
         "improper_validation": "Your API accepts clearly invalid data.",
         "perf_latency": "Parts of your service are slow.",
         "error_handling": "Parts of your service behave inconsistently.",
+        "hardcoded_secret": "A password or API key is written directly in the code — anyone with repo access has it.",
+        "unsafe_eval": "The app runs attacker-influenced text as program code.",
+        "unsafe_deserialize": "The app can be tricked into executing data as code.",
+        "tls_verify_off": "Encrypted connections are not actually being verified.",
+        "weak_crypto": "Passwords/tokens are generated with easily-cracked methods.",
+        "debug_prod": "Developer debugging mode is switched on in shipped code.",
+        "cors_wildcard": "Any website can read your API's authenticated responses.",
+        "dependency_cve": "The project uses a library version with a public, known vulnerability.",
+        "exposed_file": "A password/key file was committed to the repository.",
+        "ci_action_risk": "The automation pipeline can leak secrets to untrusted code.",
+        "docker_risk": "The app's container is missing standard safety settings.",
+        "unpinned_dependency": "Library versions are not pinned, so builds drift.",
+        "engine_error": "Engine informational notice.",
     }
     rows = ""
     for f in sorted(findings, key=lambda x: sev_order.get(x.get("severity"), 5)):

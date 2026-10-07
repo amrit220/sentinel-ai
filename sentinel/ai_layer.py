@@ -232,6 +232,139 @@ KB = {
             "why": "Predictable APIs are testable, monitorable, and hide less information from attackers.",
         },
     },
+    # ================= static / repo-scan categories =================
+    "hardcoded_secret": {
+        "explanation": "A credential (password, API key or token) is written directly into the source code. Anyone with repository access — including ex-employees, CI logs, forks, and anyone who ever received the code — holds a working key.",
+        "root_cause": "Secrets stored in code because no external configuration system was in place.",
+        "fix_conceptual": "Move every credential to environment variables or a secrets manager, load it at runtime, and rotate the leaked value immediately — removing it from current code is not enough, it stays in git history.",
+        "fix_code": "# Vulnerable\nAPI_KEY = 'sk_live_EXAMPLE_KEY'\n\n# Fixed: read from environment / secret manager\nimport os\nAPI_KEY = os.environ['PAYMENT_API_KEY']\n# and rotate the old key NOW - it is burned",
+        "learning": {
+            "mistake": "Typing real credentials into a file that gets committed.",
+            "best_practice": "Secrets live in a vault (AWS Secrets Manager, Doppler, .env excluded via .gitignore). Add secret scanning (gitleaks) as a pre-commit hook.",
+            "why": "Leaked keys are the #1 cause of account takeovers and cryptomining bills; git history means 'deleting' the line never removes it.",
+        },
+    },
+    "unsafe_eval": {
+        "explanation": "The code evaluates dynamically-built strings as program code (eval/exec/new Function). If any part of that string comes from user input, attackers can execute arbitrary logic inside your process.",
+        "root_cause": "eval() used for quick config/templating/math instead of a safe parser.",
+        "fix_conceptual": "Replace eval with explicit parsers: ast.literal_eval for literals, json.loads for data, template engines for strings, and calculated dispatch tables instead of dynamic code.",
+        "fix_code": "# Vulnerable: eval(user_expr)\nresult = eval(request.args.get('expr'))\n\n# Fixed\nimport ast\nresult = ast.literal_eval(user_input)      # data only, never code\n# or a real expression parser: `simpleeval`, `asteval`",
+        "learning": {
+            "mistake": "Using eval() to 'save time' parsing dynamic input.",
+            "best_practice": "Never eval strings influenced by external data; pick a safe, purpose-built parser.",
+            "why": "eval turns any injection bug into instant remote code execution with zero additional effort for the attacker.",
+        },
+    },
+    "unsafe_deserialize": {
+        "explanation": "The code deserializes data with a format that can carry executable payloads (pickle) or loads YAML with a permissive loader. A crafted payload here is one of the most reliable paths to remote code execution.",
+        "root_cause": "Using pickle/yaml.load where JSON would do, or accepting serialized objects from untrusted sources.",
+        "fix_conceptual": "Use JSON for anything crossing a trust boundary; if pickle is unavoidable, sign/HMAC the payload. Use yaml.safe_load always.",
+        "fix_code": "# Vulnerable\nobj = pickle.loads(request.data)\ncfg = yaml.load(text)                 # allows !!python/object tags\n\n# Fixed\nobj = json.loads(request.data)\ncfg = yaml.safe_load(text)",
+        "learning": {
+            "mistake": "Deserializing whatever arrives without questioning the format's power.",
+            "best_practice": "JSON between trust boundaries; pickle only for your own signed, trusted data.",
+            "why": "Unpickling untrusted data is equivalent to giving the sender code execution rights on your server.",
+        },
+    },
+    "tls_verify_off": {
+        "explanation": "Outgoing HTTPS requests are made with certificate verification disabled (verify=False / rejectUnauthorized:false). That makes every connection silently vulnerable to man-in-the-middle interception.",
+        "root_cause": "Verification disabled to 'fix' self-signed certificate errors during development, then shipped.",
+        "fix_conceptual": "Never disable verification globally. For internal CAs, add the internal root certificate to the trust store instead.",
+        "fix_code": "# Vulnerable\nrequests.post(url, verify=False)\n\n# Fixed (internal CA)\nrequests.post(url, verify='/etc/ssl/certs/internal-ca.pem')\n# or: add the CA to the OS trust store once",
+        "learning": {
+            "mistake": "Turning off TLS verification to silence an error message.",
+            "best_practice": "Fix the certificate chain, not the check; gate verify=False from production config in CI.",
+            "why": "With verification off, an attacker on the network path can read and rewrite all 'encrypted' traffic including credentials.",
+        },
+    },
+    "weak_crypto": {
+        "explanation": "The code uses a broken primitive (MD5/SHA1) or a non-cryptographic RNG (random) for security purposes like passwords or tokens. These can be brute-forced or guessed quickly.",
+        "root_cause": "Convenience primitives reused for security jobs.",
+        "fix_conceptual": "Use a modern slow KDF for passwords (bcrypt/argon2), SHA-256+ for integrity, and the secrets module for tokens.",
+        "fix_code": "# Vulnerable\nh = hashlib.md5(password).hexdigest()\ntoken = random.random()\n\n# Fixed\nimport bcrypt, secrets\nh = bcrypt.hashpw(password.encode(), bcrypt.gensalt())\ntoken = secrets.token_urlsafe(32)",
+        "learning": {
+            "mistake": "Reaching for familiar functions (md5, random) in security contexts.",
+            "best_practice": "Passwords: bcrypt/argon2. Tokens: secrets. Integrity: SHA-256 family.",
+            "why": "Weak hashing turns a database leak into instant password recovery; predictable tokens break session security entirely.",
+        },
+    },
+    "debug_prod": {
+        "explanation": "Debug mode is enabled in the code path. In production this exposes the interactive debugger, stack traces, and configuration — which frequently allows remote code execution via the debugger console.",
+        "root_cause": "Development settings committed without an environment switch.",
+        "fix_conceptual": "Drive debug/development flags from environment configuration, defaulting to OFF.",
+        "fix_code": "# Vulnerable\napp.run(debug=True)\n\n# Fixed\napp.run(debug=os.environ.get('FLASK_ENV') == 'development')",
+        "learning": {
+            "mistake": "Hardcoding debug=True.",
+            "best_practice": "All environment knobs read from config/env vars; debug defaults off even for local runs.",
+            "why": "Flask's debug console alone allows arbitrary code execution if the port is reachable.",
+        },
+    },
+    "cors_wildcard": {
+        "explanation": "The API answers with a wildcard CORS policy, letting any website read responses from authenticated user sessions — a direct path to cross-site data theft.",
+        "root_cause": "CORS configured to '*' to make dev integration easy.",
+        "fix_conceptual": "Whitelist the exact origins that need API access.",
+        "fix_code": "# Vulnerable\nCORS(app, origins='*')\n\n# Fixed\nCORS(app, origins=['https://app.yourdomain.com'])",
+        "learning": {
+            "mistake": "Copying permissive CORS config from tutorials.",
+            "best_practice": "Explicit origin allow-list; never wildcard with credentials.",
+            "why": "Wildcard CORS converts any victim's browser into a proxy that reads your API with their cookies.",
+        },
+    },
+    "dependency_cve": {
+        "explanation": "The project pins a dependency version with at least one published, known vulnerability (matched via OSV.dev). Exploitation difficulty varies, but public exploit code usually exists.",
+        "root_cause": "Dependencies installed long ago and never audited or updated.",
+        "fix_conceptual": "Upgrade to a fixed release immediately, then automate: enable Dependabot/Renovate and add dependency audits to CI.",
+        "fix_code": "# requirements.txt - bump to the fixed release, then\npip install -r requirements.txt\n\n# CI: fail the build on known-vulnerable deps\n# pip-audit / npm audit --audit-level=high",
+        "learning": {
+            "mistake": "Treating third-party packages as trusted black boxes.",
+            "best_practice": "Automated update PRs (Dependabot) + CI audit gates + minimal dependency trees.",
+            "why": "Attackers scan for vulnerable library fingerprints before targeting your code — it is the cheapest way in.",
+        },
+    },
+    "exposed_file": {
+        "explanation": "A sensitive file — an environment file, a private key, or a database — is committed to the repository. Everyone with repo access has the credential, and it remains in git history forever.",
+        "root_cause": "Files created locally during development, then committed by accident.",
+        "fix_conceptual": "Add .gitignore rules for secret files, remove them from the entire history (git filter-repo), and rotate everything exposed.",
+        "fix_code": "# .gitignore\n.env\n*.pem\nid_rsa*\n*.sqlite\n\n# purge history and rotate\n# git rm --cached .env && git filter-repo --path .env --invert-paths",
+        "learning": {
+            "mistake": "Committing first, thinking about sensitivity later (or never).",
+            "best_practice": "Secret files never enter git: strict .gitignore from commit #1 + pre-commit secret scanners.",
+            "why": "One committed key can outlive the project; history keeps it forever and bots scrape public repos for secrets within minutes.",
+        },
+    },
+    "ci_action_risk": {
+        "explanation": "A GitHub Actions workflow uses pull_request_target (which carries repository secrets) while checking out code from the fork/PR — so untrusted fork code executes with access to your secrets.",
+        "root_cause": "Copying a workflow pattern without understanding the trust model of pull_request_target.",
+        "fix_conceptual": "Never combine pull_request_target with a checkout of PR head code. If needed, split into two jobs and pass only vetted artifacts.",
+        "fix_code": "# Vulnerable pattern\non: pull_request_target\nsteps:\n  - uses: actions/checkout@v4\n    with:\n      ref: ${{ github.event.pull_request.head.ref }}\n\n# Fixed\non: pull_request        # no repo secrets in the context\n# -or- keep pull_request_target but only build the BASE ref, never fork code",
+        "learning": {
+            "mistake": "Assuming 'the workflow runs on GitHub, it must be safe'.",
+            "best_practice": "Treat PRs from forks as hostile; never give them secret-bearing contexts.",
+            "why": "This exact mistake has leaked cloud credentials from major open-source projects repeatedly.",
+        },
+    },
+    "docker_risk": {
+        "explanation": "The Docker image runs as root, pipes downloads into a shell, or bakes secrets into layers. A container breakout or image leak then means full host access.",
+        "root_cause": "Dockerfile written for convenience without hardening steps.",
+        "fix_conceptual": "Create an unprivileged user, verify downloads by checksum, and pass secrets at runtime.",
+        "fix_code": "# Dockerfile - fixed\nRUN adduser --disabled-password appuser\nUSER appuser\n# and: curl -sSL https://... -o pkg && sha256sum -c pkg.sha256 && npm i",
+        "learning": {
+            "mistake": "Treating the container as a mini-VM with root by default.",
+            "best_practice": "Least privilege everywhere: non-root USER, checksummed installs, multi-stage builds, secrets via runtime injection.",
+            "why": "Container escapes are rarely needed when the container already runs as root with baked-in secrets.",
+        },
+    },
+    "unpinned_dependency": {
+        "explanation": "A dependency is declared without an exact version, so builds silently drift and vulnerability audits become guesswork.",
+        "root_cause": "Loose specifiers chosen for flexibility.",
+        "fix_conceptual": "Pin exact versions in lockfiles, or pin with caret + committed lockfile.",
+        "fix_code": "# requirements.txt\nflask==3.0.3        # not flask>=2\n# package.json + committed package-lock.json",
+        "learning": {
+            "mistake": "Leaving version specifiers loose 'to stay flexible'.",
+            "best_practice": "Lockfiles committed; updates via automated, reviewable PRs.",
+            "why": "Unpinned builds are non-reproducible and can't be proven safe — you no longer know what you ship.",
+        },
+    },
 }
 
 
