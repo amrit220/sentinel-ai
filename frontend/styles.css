@@ -125,6 +125,9 @@ nav{padding:12px 10px;display:flex;flex-direction:column;gap:2px;flex:1}
 h2.sect{font-size:14px;text-transform:uppercase;letter-spacing:1.4px;color:var(--dim);margin:26px 0 12px}
 .muted{color:var(--dim)} .small{font-size:12px} .mono{font-family:var(--mono)}
 .row{display:flex;align-items:center;gap:10px;flex-wrap:wrap} .spread{justify-content:space-between}
+/* allow long URLs / paths / tokens to wrap instead of overflowing flex layouts */
+.row>*{min-width:0}
+.mono{overflow-wrap:anywhere}
 .mt{margin-top:14px} .mb{margin-bottom:14px}
 
 /* ---------- score donuts ---------- */

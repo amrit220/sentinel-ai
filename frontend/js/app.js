@@ -33,6 +33,8 @@ function toggleSidebar(force) {
 
 const DEMO_URL = 'http://127.0.0.1:5099';
 let CURRENT_SCAN = null;   // shared state for results view
+let SCAN_MODE = 'api';     // 'api' | 'github' | 'local'
+let DASH_SCAN = null;      // dashboard scan-switcher selection (null = latest)
 
 /* ============================== router ==============================
    Hash-based SPA router. Reads the URL fragment (#/page/arg), highlights
@@ -91,19 +93,30 @@ async function refreshAlertBadge() {
 }
 
 /* ============================ DASHBOARD ============================
-   Overview page: four score donuts from the latest completed scan,
-   threat-distribution bars, latest alerts and the recent scans table. */
+   Overview page: scan switcher, four score donuts from the selected
+   scan, threat-distribution bars, latest alerts and recent scans. */
 async function pageDashboard(_arg, view) {
   const [scans, alerts] = await Promise.all([API.get('/api/scans'), API.get('/api/alerts')]);
-  const last = scans.scans[0];
   const done = scans.scans.filter(s => s.status === 'completed');
-  const doneLast = done[0];
-  const counts = doneLast?.summary?.counts || { critical: 0, high: 0, medium: 0, low: 0 };
-  const scores = doneLast?.summary?.scores || { overall: 0, security: 0, performance: 0, quality: 0 };
+  const selected = done.find(s => s.id === DASH_SCAN) || done[0];
+  const counts = selected?.summary?.counts || { critical: 0, high: 0, medium: 0, low: 0 };
+  const scores = selected?.summary?.scores || { overall: null, security: null, performance: null, quality: null };
+
+  const switcher = done.length > 1 ? `
+    <div class="card tight row spread mb" style="flex-wrap:wrap">
+      <span class="muted small">Showing results for:</span>
+      <select id="dashScanSel" style="width:100%;max-width:420px" onchange="DASH_SCAN=this.value;pageDashboard(null,document.getElementById('view'))">
+        ${done.map(s => `<option value="${s.id}" ${s.id === selected.id ? 'selected' : ''}>
+          ${esc(s.target)} — ${(s.summary?.scores?.overall ?? '?')}/100 (${s.config?.mode === 'repo' ? 'repo' : 'api'})
+        </option>`).join('')}
+      </select>
+      <a class="btn small" href="#/results/${selected.id}">Open results →</a>
+    </div>` : '';
 
   view.innerHTML = `
+    ${switcher}
     <div class="grid c4">
-      ${scoreCard('Overall', scores.overall, doneLast?.summary?.scores?.risk)}
+      ${scoreCard('Overall', scores.overall, scores.risk)}
       ${scoreCard('Security', scores.security)}
       ${scoreCard('Performance', scores.performance)}
       ${scoreCard('Quality', scores.quality)}
@@ -112,16 +125,16 @@ async function pageDashboard(_arg, view) {
     <div class="grid c2 mt">
       <div class="card">
         <div class="row spread"><h2 class="sect" style="margin:0">Threat distribution</h2>
-          <span class="muted small">latest completed scan</span></div>
+          <span class="muted small">${selected ? esc(selected.target) : 'no completed scans'}</span></div>
         ${Charts.bars([
           { label: 'Critical', value: counts.critical || 0, color: SEV_COLOR.critical },
           { label: 'High', value: counts.high || 0, color: SEV_COLOR.high },
           { label: 'Medium', value: counts.medium || 0, color: SEV_COLOR.medium },
           { label: 'Low', value: counts.low || 0, color: SEV_COLOR.low },
         ])}
-        ${doneLast ? `<div class="row mt small">
-          <a href="#/results/${doneLast.id}">View full results for ${esc(doneLast.target)} →</a></div>`
-          : `<div class="muted small mt">No completed scans yet — start one.</div>`}
+        ${selected ? `<div class="row mt small">
+          <a href="#/results/${selected.id}">View full results for ${esc(selected.target)} →</a></div>`
+          : `<div class="muted small mt">No completed scans yet — <a href="#/scan">start one</a>.</div>`}
       </div>
       <div class="card">
         <h2 class="sect" style="margin-top:0">Recent alerts</h2>
@@ -137,15 +150,17 @@ async function pageDashboard(_arg, view) {
     || '<div class="muted small">No alerts. Run a scan to begin.</div>';
 }
 
-/** Donut + label card used by the dashboard and results pages. */
+/** Donut + label card used by the dashboard and results pages.
+    `val === null` renders an N/A card (e.g. performance in repo scans). */
 function scoreCard(label, val, risk) {
-  const col = val >= 80 ? '#00e5a0' : val >= 60 ? '#4dd8ff' : val >= 40 ? '#ffd23d' : '#ff3b5c';
+  const na = val === null || val === undefined;
+  const col = na ? '#8b95a5' : val >= 80 ? '#00e5a0' : val >= 60 ? '#4dd8ff' : val >= 40 ? '#ffd23d' : '#ff3b5c';
   return `<div class="card score-card">
-    ${Charts.donut(val, col, 108, 9)}
+    ${Charts.donut(na ? 0 : val, col, 108, 9, na ? '—' : undefined)}
     <div>
       <div class="score-label">${label}</div>
-      <div class="score-grade">score ${val ?? 0}/100</div>
-      ${risk ? `<div class="score-risk" style="color:${col}">${esc(risk)}</div>` : ''}
+      <div class="score-grade">${na ? 'not measured (static scan)' : `score ${val}/100`}</div>
+      ${(risk && !na) ? `<div class="score-risk" style="color:${col}">${esc(risk)}</div>` : ''}
     </div>
   </div>`;
 }
@@ -174,50 +189,106 @@ function alertRow(a) {
     <div class="muted small">${fmtTime(a.created_at)}</div></div></div>`;
 }
 
-/* ============================ NEW SCAN ============================ */
+/* ============================ NEW SCAN ============================
+   Three scan types:
+     api    — dynamic testing + attack simulation vs. a live endpoint
+     github — static analysis of any public GitHub repository
+     local  — static analysis of a folder on this machine
+   Repo scans can optionally use the Docker runtime sandbox. */
 async function pageScan(_arg, view) {
   view.innerHTML = `
   <div class="grid c2">
     <div class="card">
-      <h2 class="sect" style="margin-top:0">Target</h2>
-      <div class="field">
-        <span class="lbl">Base URL of the API / system (authorized targets only)</span>
-        <input type="text" id="scTarget" placeholder="https://api.example.com">
+      <h2 class="sect" style="margin-top:0">Scan type</h2>
+      <div class="row mb" style="gap:8px">
+        <button class="btn small" id="mtApi" onclick="setScanMode('api')">⚡ API Target</button>
+        <button class="btn small" id="mtGh" onclick="setScanMode('github')">🐙 GitHub Repo</button>
+        <button class="btn small" id="mtLc" onclick="setScanMode('local')">📁 Local Folder</button>
       </div>
-      <div class="row mb">
-        <button class="btn small" onclick="useDemo()">⚡ Use bundled demo target</button>
-        <span class="muted small">launches full detection pipeline vs. demo</span>
-      </div>
-      <div class="field">
-        <span class="lbl">OpenAPI / Swagger spec (optional — auto-discovery otherwise)</span>
-        <textarea id="scSpec" rows="5" placeholder='{"openapi":"3.0.0","paths":{"/api/users":{"get":{...}}}}'></textarea>
-      </div>
-      <h2 class="sect">Modules</h2>
-      <div style="display:flex;flex-direction:column;gap:8px">
-        <label class="ck"><input type="checkbox" id="mFunc" checked> Functional / edge / negative test suite</label>
-        <label class="ck"><input type="checkbox" id="mAtk" checked> Vulnerability detection + attack simulation</label>
-        <label class="ck"><input type="checkbox" id="mPerf"> Performance / load testing</label>
-      </div>
-      <div id="perfCfg" class="hidden mt">
-        <div class="grid c2">
-          <div class="field"><span class="lbl">Virtual users</span><input type="number" id="pConc" value="20"></div>
-          <div class="field"><span class="lbl">Duration (s)</span><input type="number" id="pDur" value="8"></div>
+
+      <div id="apiFields">
+        <div class="field">
+          <span class="lbl">Base URL of the API / system (authorized targets only)</span>
+          <input type="text" id="scTarget" placeholder="https://api.example.com">
+        </div>
+        <div class="row mb">
+          <button class="btn small" onclick="useDemo()">⚡ Use bundled demo target</button>
+          <span class="muted small">launches full detection pipeline vs. demo</span>
+        </div>
+        <div class="field">
+          <span class="lbl">OpenAPI / Swagger spec (optional — auto-discovery otherwise)</span>
+          <textarea id="scSpec" rows="5" placeholder='{"openapi":"3.0.0","paths":{"/api/users":{"get":{...}}}}'></textarea>
+        </div>
+        <h2 class="sect">Modules</h2>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <label class="ck"><input type="checkbox" id="mFunc" checked> Functional / edge / negative test suite</label>
+          <label class="ck"><input type="checkbox" id="mAtk" checked> Vulnerability detection + attack simulation</label>
+          <label class="ck"><input type="checkbox" id="mPerf"> Performance / load testing</label>
+        </div>
+        <div id="perfCfg" class="hidden mt">
+          <div class="grid c2">
+            <div class="field"><span class="lbl">Virtual users</span><input type="number" id="pConc" value="20"></div>
+            <div class="field"><span class="lbl">Duration (s)</span><input type="number" id="pDur" value="8"></div>
+          </div>
         </div>
       </div>
+
+      <div id="repoFields" class="hidden">
+        <div class="field" id="ghUrlField">
+          <span class="lbl">Public GitHub repository URL</span>
+          <input type="text" id="scRepoUrl" placeholder="https://github.com/owner/repo">
+        </div>
+        <div class="field" id="ghBranchField">
+          <span class="lbl">Branch (optional — default branch if empty)</span>
+          <input type="text" id="scBranch" placeholder="main">
+        </div>
+        <div class="field hidden" id="lcPathField">
+          <span class="lbl">Project folder on this machine</span>
+          <input type="text" id="scLocalPath" placeholder="C:\\path\\to\\project">
+        </div>
+        <h2 class="sect">Static analysis modules</h2>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <label class="ck"><input type="checkbox" checked disabled> Language rule packs — SQLi, XSS, eval, secrets, weak crypto, TLS-off, CI/Docker</label>
+          <label class="ck"><input type="checkbox" id="rDeps" checked> Dependency CVE audit (OSV.dev)</label>
+          <label class="ck"><input type="checkbox" id="rRuntime"> ⚠ Runtime sandbox (EXPERIMENTAL — needs Docker; builds & runs the repo, then attacks it)</label>
+        </div>
+        <div class="muted small mt" id="repoNote">The project is analyzed statically — its code is never executed.</div>
+      </div>
+
       <button class="btn primary mt" id="scStart" onclick="startScan()">▶ Launch scan</button>
     </div>
 
     <div class="card">
       <h2 class="sect" style="margin-top:0">Live pipeline</h2>
       <div id="scProgress">
-        <div class="muted small">Configure a target and launch. The pipeline runs:
-        discovery → tests → attacks → classification → AI analysis → scoring.</div>
+        <div class="muted small">Pick a scan type and launch. The pipeline runs:
+        discovery → tests/analysis → attacks/rules → classification → AI analysis → scoring.</div>
       </div>
     </div>
   </div>`;
 
   const perf = view.querySelector('#mPerf');
   perf.addEventListener('change', () => view.querySelector('#perfCfg').classList.toggle('hidden', !perf.checked));
+  setScanMode(SCAN_MODE);
+}
+
+/** Toggle between API / GitHub / Local-folder scan modes. */
+function setScanMode(mode) {
+  SCAN_MODE = mode;
+  const api = document.getElementById('apiFields');
+  const repo = document.getElementById('repoFields');
+  if (!api || !repo) return;
+  api.classList.toggle('hidden', mode !== 'api');
+  repo.classList.toggle('hidden', mode === 'api');
+  ['mtApi', 'mtGh', 'mtLc'].forEach((id, i) =>
+    document.getElementById(id).classList.toggle('primary', ['api', 'github', 'local'][i] === mode));
+  document.getElementById('ghUrlField').classList.toggle('hidden', mode !== 'github');
+  document.getElementById('ghBranchField').classList.toggle('hidden', mode !== 'github');
+  document.getElementById('lcPathField').classList.toggle('hidden', mode !== 'local');
+  document.getElementById('repoNote').textContent =
+    mode === 'github' ? 'The repository is shallow-cloned and analyzed statically — its code is never executed.'
+    : mode === 'local' ? 'The folder is read and analyzed statically — nothing inside it is executed.'
+    : '';
 }
 
 /** Fill the form with the bundled demo target — and verify it's actually
@@ -232,22 +303,46 @@ async function useDemo() {
   }
 }
 
-/** Collect target + module config from the form and POST /api/scans,
+/** Collect scan config from the form (per mode), POST /api/scans,
     then hand off to the live progress poller. */
 async function startScan() {
-  const target = document.getElementById('scTarget').value.trim();
-  if (!target) return UI.toast('Enter a target URL', true);
-  const body = {
-    target,
-    openapi: document.getElementById('scSpec').value.trim() || null,
-    functional: document.getElementById('mFunc').checked,
-    attacks: document.getElementById('mAtk').checked,
-    performance: document.getElementById('mPerf').checked,
-  };
-  if (body.performance) {
-    body.perfConcurrency = +document.getElementById('pConc').value;
-    body.perfDuration = +document.getElementById('pDur').value;
+  let body;
+  if (SCAN_MODE === 'api') {
+    const target = document.getElementById('scTarget').value.trim();
+    if (!target) return UI.toast('Enter a target URL', true);
+    body = {
+      mode: 'api',
+      target,
+      openapi: document.getElementById('scSpec').value.trim() || null,
+      functional: document.getElementById('mFunc').checked,
+      attacks: document.getElementById('mAtk').checked,
+      performance: document.getElementById('mPerf').checked,
+    };
+    if (body.performance) {
+      body.perfConcurrency = +document.getElementById('pConc').value;
+      body.perfDuration = +document.getElementById('pDur').value;
+    }
+  } else if (SCAN_MODE === 'github') {
+    const repoUrl = document.getElementById('scRepoUrl').value.trim();
+    if (!repoUrl) return UI.toast('Enter a GitHub repository URL', true);
+    body = {
+      mode: 'repo',
+      repoUrl,
+      branch: document.getElementById('scBranch').value.trim(),
+      deps: document.getElementById('rDeps').checked,
+      runtime: document.getElementById('rRuntime').checked,
+    };
+  } else {
+    const localPath = document.getElementById('scLocalPath').value.trim();
+    if (!localPath) return UI.toast('Enter a project folder path', true);
+    body = {
+      mode: 'repo',
+      localPath,
+      deps: document.getElementById('rDeps').checked,
+      runtime: document.getElementById('rRuntime').checked,
+    };
   }
+
   const btn = document.getElementById('scStart');
   btn.disabled = true; btn.textContent = 'launching…';
   try {
@@ -320,12 +415,17 @@ async function pageResults(scanId, view) {
 
   view.innerHTML = `
     <div class="card tight scanbar">
-      <b class="mono">${esc(s.target)}</b>
+      <b class="mono">${esc(s.config?.mode === 'repo' ? (sum.repo_display || s.target) : s.target)}</b>
       <span class="sev ${s.status}">${s.status}</span>
-      <span class="tagchip">${esc(sum.discovery_mode || '')}</span>
-      <span class="tagchip">${sum.endpoints_scanned ?? 0} endpoints</span>
-      <span class="tagchip">${sum.attacks_simulated ?? 0} attacks</span>
-      <span class="tagchip">${sum.test_total ?? 0} tests</span>
+      ${s.config?.mode === 'repo' ? `
+        <span class="tagchip">static${s.config?.repo_modules?.runtime ? ' + runtime' : ''}</span>
+        <span class="tagchip">${sum.files_analyzed ?? 0} files</span>
+        <span class="tagchip">${(sum.languages || []).join(' / ') || 'generic'}</span>
+        <span class="tagchip">${sum.lines_of_code ?? 0} LOC</span>` : `
+        <span class="tagchip">${esc(sum.discovery_mode || '')}</span>
+        <span class="tagchip">${sum.endpoints_scanned ?? 0} endpoints</span>
+        <span class="tagchip">${sum.attacks_simulated ?? 0} attacks</span>
+        <span class="tagchip">${sum.test_total ?? 0} tests</span>`}
       <div style="flex:1"></div>
       <a class="btn small" href="#/reports">reports</a>
       <button class="btn small" onclick="startMonitorPrompt('${scanId}')">◉ monitor</button>
@@ -349,10 +449,11 @@ async function pageResults(scanId, view) {
 
     <h2 class="sect">Findings (${findings.length})</h2>
     <div id="findingsList">${findingsSorted(findings).map((f, i) => findingCard(f, i)).join('')
-      || '<div class="empty">No findings — target survived all simulated attacks.</div>'}</div>
+      || '<div class="empty">No findings — nothing suspicious detected in this scan.</div>'}</div>
 
-    <h2 class="sect">Test case results (${tests.length})</h2>
-    <div class="card">${testTable(tests)}</div>
+    ${tests.length ? `
+      <h2 class="sect">Test case results (${tests.length})</h2>
+      <div class="card">${testTable(tests)}</div>` : ''}
 
     ${perf ? `
       <h2 class="sect">Load test — ${esc(perf.verdict?.toUpperCase() || '')}</h2>
@@ -382,17 +483,20 @@ function findingsSorted(fs) {
 }
 
 /** Expandable finding card: evidence, impact, AI explanation + code fix,
-    learning-mode lesson, and the replay / analyze / chat action buttons. */
+    learning-mode lesson, and the replay / analyze / chat action buttons.
+    Static (repo-scan) findings get a CODE TRACE instead of attack replay. */
 function findingCard(f, i) {
   const ai = f.ai_analysis || {};
   const learning = f.ai_learning || ai.learning || {};
   const code = f.ai_fix_code || ai.fix_code;
+  const isStatic = f.method === 'STATIC';
   return `
   <div class="finding ${f.severity}" id="f-${f.id}">
     <div class="finding-head">
       <span class="sev ${f.severity}">${f.severity}</span>
+      <span class="sev ${isStatic ? 'low' : 'info'}">${isStatic ? 'static' : 'dynamic'}</span>
       <span class="title">${esc(f.title)}</span>
-      <span class="endp">${esc(f.method || 'GET')} ${esc(f.endpoint || '')}</span>
+      <span class="endp">${isStatic ? '' : esc(f.method || 'GET') + ' '}${esc(f.endpoint || '')}</span>
       <span class="muted small">${f.confidence ? Math.round(f.confidence * 100) : 80}% conf</span>
       <span class="sev ${f.exploit_success ? 'fail' : 'pass'}">${f.exploit_success ? 'exploited' : 'not exploited'}</span>
     </div>
@@ -408,7 +512,7 @@ function findingCard(f, i) {
           <div class="small"><b>Best practice:</b> ${esc(learning.best_practice)}</div>
           <div class="small"><b>Why it matters:</b> ${esc(learning.why)}</div></div>` : ''}
       <div class="row mt">
-        ${f.attack_path?.length ? `<button class="btn small" onclick="UI.replay('${f.id}', ${i})">⏯ Attack replay</button>` : ''}
+        ${f.attack_path?.length ? `<button class="btn small" onclick="UI.replay('${f.id}', ${i})">${isStatic ? '⌕ Code trace' : '⏯ Attack replay'}</button>` : ''}
         <button class="btn small" onclick="UI.deepAnalyze('${f.id}')">🤖 Analyze with AI</button>
         <button class="btn small" onclick="UI.askAI('${f.id}')">💬 Debug assistant</button>
       </div>
@@ -421,10 +525,11 @@ function findingCard(f, i) {
 UI.replay = function (fid, i) {
   const f = CURRENT_SCAN.findings.find(x => x.id === fid);
   if (!f) return;
+  const isStatic = f.method === 'STATIC';
   const req = f.request || {};
   UI.openModal(`
-    <h2 style="margin-bottom:4px">⏯ Attack replay — ${esc(f.title)}</h2>
-    <div class="muted small mb">step-by-step reconstruction of the simulated exploit</div>
+    <h2 style="margin-bottom:4px">${isStatic ? '⌕ Code trace' : '⏯ Attack replay'} — ${esc(f.title)}</h2>
+    <div class="muted small mb">${isStatic ? 'how this code flaw was identified' : 'step-by-step reconstruction of the simulated exploit'}</div>
     <div class="card tight mb"><b>Request</b>
       <pre class="code">${esc(req.method || 'GET')} ${esc(req.url || '')}
 ${req.params ? 'params: ' + esc(JSON.stringify(req.params)) : ''}

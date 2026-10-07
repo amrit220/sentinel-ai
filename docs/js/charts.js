@@ -1,12 +1,13 @@
 /* Hand-rolled SVG charts (zero dependencies, works offline) */
 Charts = {
-  donut(pct, color, size = 120, stroke = 10) {
+  donut(pct, color, size = 120, stroke = 10, label) {
     pct = Math.max(0, Math.min(100, pct ?? 0));
     const r = (size - stroke) / 2, c = size / 2;
     const circ = 2 * Math.PI * r;
     const dash = (pct / 100) * circ;
     const glow = pct >= 80 ? '#00e5a0' : pct >= 60 ? '#4dd8ff' : pct >= 40 ? '#ffd23d' : '#ff3b5c';
     const col = color || glow;
+    const text = label !== undefined ? label : Math.round(pct);
     return `
       <svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
         <circle cx="${c}" cy="${c}" r="${r}" fill="none" stroke="#1c2738" stroke-width="${stroke}"/>
@@ -14,7 +15,7 @@ Charts = {
           stroke-linecap="round" stroke-dasharray="${dash} ${circ - dash}"
           transform="rotate(-90 ${c} ${c})" style="filter:drop-shadow(0 0 6px ${col}66)"/>
         <text x="${c}" y="${c + 2}" text-anchor="middle" dominant-baseline="middle"
-          fill="${col}" font-size="${size / 3.4}" font-weight="800" font-family="Segoe UI">${Math.round(pct)}</text>
+          fill="${col}" font-size="${size / 3.4}" font-weight="800" font-family="Segoe UI">${text}</text>
       </svg>`;
   },
 

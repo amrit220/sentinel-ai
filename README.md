@@ -2,14 +2,25 @@
 
 **An AI-powered autonomous QA engineer + ethical hacking platform.**
 
-Sentinel AI accepts API endpoints or OpenAPI specs, automatically generates and runs
-functional / edge / negative tests, simulates controlled real-world attacks, classifies
-vulnerabilities with severity and CVSS-style scoring, explains every finding in plain
-language (with code fixes), computes weighted risk scores, and produces developer + client
-reports — all behind a modern dark-theme dashboard.
+Sentinel AI scans **anything you own** — a live API, any public GitHub repo, or a
+local project folder:
 
-> ⚠️ **Authorized testing only.** Sentinel AI is built for security teams testing systems
-> they own or are explicitly authorized to assess.
+- **API scans** — auto-generated functional/edge/negative tests, controlled
+  attack simulation (SQLi, XSS, auth, open endpoints…), risk scoring.
+- **Repo scans (static)** — shallow-clones any GitHub repo (or reads a local
+  folder) and analyzes the code *without ever executing it*: language rule
+  packs, hardcoded secrets, committed sensitive files, CI/CD + Dockerfile
+  audits, and dependency CVE checks via OSV.dev.
+- **Runtime sandbox (experimental)** — with Docker installed, repo scans can
+  optionally build & run the project in an isolated container and attack it
+  dynamically.
+
+Every finding is explained in plain language (with code fixes), scored with a
+weighted model, and published to developer + client reports — all behind a
+modern dark-theme dashboard.
+
+> ⚠️ **Authorized testing only.** Sentinel AI is built for security teams testing
+> systems they own or are explicitly authorized to assess.
 
 ---
 
@@ -27,8 +38,14 @@ python app.py --with-demo
 python app.py
 ```
 
-Open **http://127.0.0.1:5000**, go to **New Scan**, click **"⚡ Use bundled demo target"**,
-tick the modules you want, and press **Launch scan**. The pipeline completes in ~20–40s.
+Open **http://127.0.0.1:5000**, go to **New Scan**, and pick a scan type:
+
+- **⚡ API Target** — live endpoint (click "Use bundled demo target" for the full demo)
+- **🐙 GitHub Repo** — paste any public repo URL, e.g. `https://github.com/amrit220/sentinel-ai`
+- **📁 Local Folder** — any project directory on this machine
+
+The API-mode pipeline completes in ~20–40s; repo scans in ~10–60s
+(large repos add clone time + OSV dependency checks).
 
 ### Optional: connect a real LLM
 
@@ -51,61 +68,78 @@ The active backend is shown in the dashboard sidebar (`AI: sentinel-mind` or `AI
 ```
                         ┌────────────────────────────────────────────────┐
                         │                FRONTEND SPA                     │
-                        │  Dashboard · Scan · Results · Reports ·        │
-                        │  Monitoring · Learning  (dark cyber theme)     │
+                        │  Dashboard · Scan (api|github|local) ·          │
+                        │  Results · Reports · Monitoring · Learning     │
                         └───────────────┬────────────────────────────────┘
                                         │ REST (JSON, hash-routed SPA)
                         ┌───────────────▼────────────────────────────────┐
                         │             FLASK API LAYER  (app.py)           │
-                        │  /api/scans · /api/findings · /api/reports ·    │
-                        │  /api/ai/assistant · /api/monitor · /api/alerts│
+                        │  POST /api/scans {mode: api|repo} dispatches to  │
+                        │  the right pipeline; everything else is shared  │
                         └───────────────┬────────────────────────────────┘
                                         │  background threads
-        ┌───────────────┬───────────────┼───────────────┬─────────────────┐
-        ▼               ▼               ▼               ▼                 ▼
-┌──────────────┐ ┌─────────────┐ ┌──────────────┐ ┌──────────────┐ ┌──────────────┐
-│ SCANNER      │ │ ATTACK      │ │ VULN         │ │ AI LAYER     │ │ PERF ENGINE  │
-│ discovery,   │ │ ENGINE      │ │ ENGINE       │ │ LLM or       │ │ concurrent    │
-│ functional/  │ │ controlled  │ │ classification│ │ SentinelMind │ │ virtual users │
-│ edge/negative│ │ payload     │ │ severity,    │ │ explanations │ │ p50/p95/p99   │
-│ test suites  │ │ injection   │ │ CVSS, dedup  │ │ fixes, learn │ │ bottlenecks   │
-└──────┬───────┘ └──────┬──────┘ └──────┬───────┘ └──────┬───────┘ └──────┬───────┘
-       │                │               │                │                │
-       └────────────────┴───────┬───────┴────────────────┴────────────────┘
+              ┌─────────────────────────┴─────────────────────────┐
+              ▼  mode=api                                        ▼  mode=repo
+┌───────────────────────────────┐             ┌───────────────────────────────┐
+│ SCANNER (dynamic)             │             │ REPO ENGINE (static)          │
+│ discovery · functional/edge/  │             │ git clone --depth 1 / local   │
+│ negative tests                │             │ read · language detection     │
+│ ATTACK ENGINE                 │             │ Python+JS rule packs · secret │
+│ SQLi/XSS/auth/open-endpoints  │             │ scan · sensitive files · CI + │
+│ payloads + attack replay      │             │ Dockerfile audit · OSV CVE   │
+│ PERF ENGINE                   │             │ dependency audit              │
+│ concurrent virtual users      │             │ (optional) DOCKER RUNTIME    │
+│ p50/p95/p99 · bottleneck      │             │ sandbox → ATTACK ENGINE       │
+└───────────────┬───────────────┘             └───────────────┬───────────────┘
+                └──────────────────┬──────────────────────────┘
+                                   ▼
+                    ┌─────────────────────────┐
+                    │ VULN ENGINE (classify)   │
+                    │ severity · CVSS · dedup │
+                    └────────────┬─────────────┘
+                                 ▼
+                    ┌─────────────────────────┐
+                    │ AI LAYER                 │
+                    │ LLM or SentinelMind      │
+                    │ explanations + fixes +   │
+                    │ learning lessons          │
+                    └────────────┬─────────────┘
                                  ▼
                     ┌─────────────────────────┐      ┌──────────────────────┐
-                    │ PIPELINE ORCHESTRATOR   │─────▶│ SCORING SYSTEM        │
-                    │ (sentinel/engines/      │      │ security / perf /     │
-                    │  pipeline.py, threads)  │      │ quality 0–100, grade  │
-                    └────────────┬─────────────┘      └──────────────────────┘
-                                 ▼
-                    ┌─────────────────────────┐      ┌──────────────────────┐
-                    │ SQLITE PERSISTENCE      │◀────▶│ MONITOR ENGINE       │
-                    │ scans · findings ·      │      │ periodic re-scans,   │
-                    │ tests · alerts          │      │ new-vuln alerting    │
+                    │ SCORING + SUMMARY        │─────▶│ REPORT GENERATOR      │
+                    │ security/perf/quality    │      │ dev · client · JSON  │
                     └────────────┬─────────────┘      └──────────────────────┘
                                  ▼
                     ┌─────────────────────────┐
-                    │ REPORT GENERATOR        │
-                    │ Developer (technical)   │
-                    │ Client (plain language) │
-                    │ JSON export              │
+                    │ SQLITE + ALERTS +        │
+                    │ MONITOR (periodic re-    │
+                    │ scans, new-vuln alerts)  │
                     └─────────────────────────┘
 ```
 
 ### Data flow
 
 ```
-User → Scan config → API layer → pipeline thread
-     → discovery (OpenAPI input / target-hosted spec / path probing)
-     → functional · edge · negative test suite (status/structure/latency/error handling)
-     → attack simulation (SQLi · XSS · auth · open endpoints · traversal · cmd-injection ·
-       header audit · data-leak audit · verbose-error audit · validation audit)
-     → vulnerability classification (severity + CVSS + confidence + fingerprint dedup)
-     → AI enrichment (explanation, root cause, conceptual fix, code fix, learning lesson)
-     → weighted scoring (security 60% / performance 25% / quality 15%)
-     → AI executive summary + recommendations
-     → SQLite → dashboard / reports / alerts
+User → Scan config → API layer → pipeline thread (mode dispatch)
+
+api mode:
+  → reachability check → discovery (OpenAPI input / hosted spec / path probing)
+  → functional · edge · negative test suite (status/structure/latency/error handling)
+  → attack simulation (SQLi · XSS · auth · open endpoints · traversal · cmd-injection ·
+    header audit · data-leak audit · verbose-error audit · validation audit)
+
+repo mode:
+  → git clone --depth 1 (GitHub) or local folder read
+  → inventory + language detection → Python/JS rule packs → secret scan
+  → sensitive-file scan → CI workflow + Dockerfile audit → OSV.dev dependency CVEs
+  → (optional, Docker) build & run in container → dynamic attack engines
+
+both modes:
+  → vulnerability classification (severity + CVSS + confidence + fingerprint dedup)
+  → AI enrichment (explanation, root cause, conceptual fix, code fix, learning lesson)
+  → weighted scoring (security 60% / performance 25% / quality 15%)
+  → AI executive summary + recommendations
+  → SQLite → dashboard / reports / alerts
 ```
 
 ---
@@ -114,7 +148,7 @@ User → Scan config → API layer → pipeline thread
 
 ```
 SentinelAI/
-├── app.py                        # Flask app, REST routes, --with-demo launcher
+├── app.py                        # Flask app, REST routes, mode dispatch, --with-demo launcher
 ├── config.py                     # global config, weights, thresholds
 ├── requirements.txt
 ├── sentinel/
@@ -125,21 +159,30 @@ SentinelAI/
 │   └── engines/
 │       ├── scanner.py            # discovery, OpenAPI parsing, test generation + execution
 │       ├── attack_engine.py      # controlled attack suites + passive audits + attack paths
+│       ├── repo_engine.py        # static analysis: clone/local, rule packs, secrets, CI/Docker, OSV
 │       ├── vuln_engine.py        # classification, severity mapping, fingerprinting
 │       ├── perf_engine.py        # load testing, latency percentiles, verdicts
 │       ├── report_generator.py   # developer / client / JSON reports (self-contained HTML)
-│       ├── pipeline.py            # orchestrator running the whole flow in a thread
+│       ├── pipeline.py            # orchestrator: mode dispatch + shared scoring/AI tail
 │       └── monitor.py             # continuous monitoring scheduler + alerting
 ├── demo_target/
 │   └── vulnerable_app.py         # deliberately vulnerable demo API (DO NOT EXPOSE)
 ├── frontend/
-│   ├── index.html                # SPA shell (sidebar, topbar, modal, toasts)
-│   ├── styles.css                # dark cybersecurity SaaS theme
+│   ├── index.html                # SPA shell (sidebar, drawer, topbar, modal, toasts)
+│   ├── styles.css                # dark responsive cybersecurity SaaS theme
 │   └── js/
 │       ├── api.js                # fetch client + esc/severity helpers
 │       ├── charts.js             # hand-rolled SVG donut + bar charts (no CDN)
 │       └── app.js                # hash router + all page views + AI modals
-└── data/                         # runtime: sentinel.db + generated reports
+├── tests/
+│   ├── fixture_repo/             # planted-flaw project (36 known issues) for e2e tests
+│   ├── e2e_dashboard.py          # Playwright: full API-mode UI flow
+│   ├── e2e_repo_scan.py          # Playwright: repo-mode UI flow (local folder)
+│   └── e2e_mobile.py             # Playwright: responsive suites at 3 viewports
+├── tools/
+│   └── refresh_demo_data.py      # regenerate the GitHub Pages static-demo dataset
+├── docs/                         # GitHub Pages site (static demo of the dashboard)
+└── data/                         # runtime: sentinel.db + reports + cloned repos (gitignored)
 ```
 
 ---
@@ -149,7 +192,7 @@ SentinelAI/
 | Method | Route | Purpose |
 |---|---|---|
 | `GET`  | `/api/health` | Service status, active AI backend, demo URL |
-| `POST` | `/api/scans` | Start scan (target, OpenAPI spec, module flags) → `{scan_id}` |
+| `POST` | `/api/scans` | Start scan — `{mode:"api", target, ...}` or `{mode:"repo", repoUrl/localPath, ...}` → `{scan_id}` |
 | `GET`  | `/api/scans` | List scans with status/progress/scores |
 | `GET`  | `/api/scans/<id>` | Scan status, progress, stage, summary, recent alerts |
 | `GET`  | `/api/scans/<id>/findings` | All findings (severity, evidence, AI, attack path) |
@@ -183,7 +226,20 @@ modals, toasts, live progress bars, keyboard-friendly chat. Fully dark, zero-CDN
 
 ---
 
-## 🎯 What the engines detect (verified against the bundled demo target)
+## 🎯 What the engines detect
+
+### Repo scans (static analysis — the project's code is never executed)
+
+| Category | Examples |
+|---|---|
+| Injection flaws | SQL built via f-strings/concatenation, `eval`/`exec`, `pickle.loads`, `yaml.load` without SafeLoader, `shell=True`, `os.system`, JS `child_process` template strings |
+| Web vulnerabilities | XSS sinks (`dangerouslySetInnerHTML`, `innerHTML`, `document.write`) |
+| Crypto & config | MD5/SHA1 for passwords, `random` for tokens, `debug=True`, wildcard CORS, `verify=False` / `rejectUnauthorized:false` |
+| Secrets | Hardcoded API keys / passwords / tokens, committed `.env`, private keys, `credentials.json`, database files |
+| Supply chain | Dependency CVEs via the free OSV.dev API (exact-version matching), unpinned dependencies |
+| CI/CD & containers | `pull_request_target` + fork checkout, secrets echoed to logs, Dockerfiles running as root, pipe-to-shell installs |
+
+### API scans (dynamic testing — verified against the bundled demo target)
 
 | Finding | Class | Detected on demo |
 |---|---|---|
@@ -199,8 +255,14 @@ modals, toasts, live progress bars, keyboard-friendly chat. Fully dark, zero-CDN
 
 **Scoring model** (`sentinel/scoring.py`): security = saturating exponential decay over
 weighted severities (critical 22 · high 12 · medium 6 · low 2.5) with exploit-success
-penalty; performance from p50/p95 + error rate; quality from test pass-rate; overall =
+penalty; performance from p50/p95 + error rate (API scans; shown as N/A for repo scans);
+quality from test pass-rate (API) or code-hygiene penalty (repo); overall =
 `0.6·security + 0.25·performance + 0.15·quality`, with A–F grade and risk-level text.
+
+**Known limitation (by design):** static rules are pattern-based without dataflow
+analysis — they can flag safe code (e.g. f-string SQL over internal identifiers) and
+vulnerable code inside documentation strings. Findings carry a confidence score;
+treat static results as review targets, not proof.
 
 ## 🧪 Testing
 
@@ -210,6 +272,8 @@ python -m playwright install chromium
 python app.py --with-demo          # backend must be running first (separate terminal)
 python tests/e2e_dashboard.py      # full desktop flow: dashboard -> scan -> live
                                   # pipeline -> results -> attack replay -> reports
+python tests/e2e_repo_scan.py      # repo mode: local-folder scan of tests/fixture_repo
+                                  # (36 planted flaws) -> static findings -> code trace
 python tests/e2e_mobile.py         # responsive suite: desktop / tablet / phone
                                   # viewports, drawer navigation, overflow checks
                                   # screenshots land in tests/artifacts/ (gitignored)
@@ -238,10 +302,15 @@ below, single-column grids and horizontally scrollable tables on phones.
 
 ## 🧩 Extending the system
 
+- **New static rule** → add a `_R(...)` entry in `sentinel/engines/repo_engine.py`,
+  plus a `TITLES`/`SEVERITY_MAP` entry in `vuln_engine.py` and a knowledge-base
+  entry in `ai_layer.py::KB`. Pipeline, scoring, reports and UI pick it up automatically.
 - **New attack suite** → add payload list + detector function in `attack_engine.py`,
-  register it in `run_all_attacks`, add severity/TITLE in `vuln_engine.py`, add a
-  knowledge-base entry in `ai_layer.py::KB`. That's it — pipeline, scoring, replay,
-  reports, learning and UI pick it up automatically.
+  register it in `run_all_attacks`.
+- **New language** → add a rule pack in `repo_engine.py` and detect it via a
+  manifest in `Inventory._build` (Go/Ruby/Java are natural next steps).
+- **Private repos** → thread a PAT through `git clone` in `prepare_repo_target`
+  (in-memory only — never persist it to the database or logs).
 - **Different DB** → swap functions in `sentinel/database.py` (single choke point).
 - **Async scales** → pipeline threads map 1:1 onto Celery/RQ workers for production.
 - **Auth for the dashboard itself** → add a Flask `before_request` guard; the API surface
