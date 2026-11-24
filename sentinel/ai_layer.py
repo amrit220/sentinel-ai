@@ -6,40 +6,334 @@ Two interchangeable backends:
                      OPENAI_API_KEY / SENTINEL_LLM_KEY is configured.
 2. `SentinelMind`  - a built-in rule-based security analyst used as a
                      fallback so the prototype works fully offline.
-
 The rest of the system only ever talks to `AILayer`, never to a specific
 backend directly (clean substitution point for future models).
 """
+import collections
+import contextlib
 import json
 import re
+import threading
+import time
 
 import requests
 
 from config import Config
 
+
+# ============================================================ rate limiting ==
+class RateLimiter:
+    """Thread-safe sliding-window limiter with a global cooldown.
+
+    Keeps every LLM call (analysis, verification batches, assistant chat)
+    under the provider's requests-per-minute quota — e.g. the NVIDIA NIM
+    free tier allows 40 RPM; SENTINEL_LLM_RPM defaults to 28 for headroom.
+    Callers block politely instead of getting 429-stormed.
+
+    The quota is frequently shared with other tooling (an assistant, CI, a
+    second service). When the provider says "429", the limiter parks *every*
+    worker for the advertised Retry-After window instead of letting each one
+    burn its own retry — one saturated minute must not turn into an
+    avalanche of doomed requests.
+    """
+
+    def __init__(self, max_calls, window_s=60.0, max_concurrent=1):
+        self.max_calls = max(1, int(max_calls))
+        self.window = float(window_s)
+        self._times = collections.deque()
+        self._lock = threading.Lock()
+        self._paused_until = 0.0
+        self._quota_streak = 0
+        # Concurrency gate. Measured on the NVIDIA NIM free tier: four
+        # simultaneous requests on one key answer once and reject the other
+        # three with 429 — the practical limit is *in-flight requests*, not
+        # just requests-per-minute. Every provider call goes through this
+        # slot, so parallel workers queue instead of colliding.
+        self._slots = threading.Semaphore(max(1, int(max_concurrent)))
+
+    @contextlib.contextmanager
+    def slot(self):
+        """Hold the provider's concurrency slot for the duration of a call."""
+        self._slots.acquire()
+        try:
+            yield
+        finally:
+            self._slots.release()
+
+    def pause(self, seconds):
+        """Park every caller after a 429. The pause grows with each
+        consecutive rate-limit — a quota shared with other tools can stay
+        saturated for a while, and a fixed short pause would just walk
+        into the same wall again."""
+        with self._lock:
+            self._quota_streak += 1
+            scaled = min(60.0, max(5.0, float(seconds)) * (2 ** (self._quota_streak - 1)))
+            self._paused_until = max(self._paused_until, time.time() + scaled)
+            self._times.clear()
+
+    def note_success(self):
+        """A call went through — the provider is responsive again."""
+        with self._lock:
+            self._quota_streak = 0
+
+    def acquire(self):
+        while True:
+            with self._lock:
+                now = time.time()
+                if now < self._paused_until:
+                    wait = self._paused_until - now
+                else:
+                    while self._times and now - self._times[0] > self.window:
+                        self._times.popleft()
+                    if len(self._times) < self.max_calls:
+                        self._times.append(now)
+                        return
+                    wait = self.window - (now - self._times[0]) + 0.05
+            time.sleep(max(wait, 0.05))
+
+
+_limiter = None
+_limiter_lock = threading.Lock()
+
+
+def get_limiter():
+    global _limiter
+    if _limiter is None:
+        with _limiter_lock:
+            if _limiter is None:
+                _limiter = RateLimiter(
+                    getattr(Config, "LLM_RPM_LIMIT", 28),
+                    max_concurrent=getattr(Config, "LLM_MAX_CONCURRENCY", 1))
+    return _limiter
+
+
+def _extract_json(raw, want="object"):
+    """Best-effort JSON extraction from an LLM reply.
+
+    Chatty / reasoning-style models often wrap the payload in prose or
+    markdown fences. Tries, in order: direct parse, fence-stripped parse,
+    then the outermost {...} (or [...]) substring. Returns None when no
+    valid payload exists — callers treat that as "model failed" and fall
+    back to the offline analyst (never surface raw monologue to users)."""
+    txt = re.sub(r"^```(json)?|```$", "", (raw or "").strip(), flags=re.M).strip()
+    expected = dict if want == "object" else list
+    for candidate in (txt,):
+        try:
+            data = json.loads(candidate)
+            if isinstance(data, expected):
+                return data
+        except ValueError:
+            pass
+    open_c, close_c = ("{", "}") if want == "object" else ("[", "]")
+    start, end = txt.find(open_c), txt.rfind(close_c)
+    if start != -1 and end > start:
+        try:
+            data = json.loads(txt[start:end + 1])
+            if isinstance(data, expected):
+                return data
+        except ValueError:
+            pass
+    return None
+
+
+def _salvage_objects(raw):
+    """Recover complete JSON objects from a truncated reply.
+
+    Reasoning models can run out of token budget mid-array. Rather than
+    throwing away the whole batch, scan for balanced `{...}` blocks and keep
+    the ones that parse — a partial verdict set still beats no verdict set.
+    """
+    out, depth, start, in_str, esc = [], 0, None, False, False
+    for i, ch in enumerate(raw or ""):
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+            continue
+        if ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}" and depth:
+            depth -= 1
+            if depth == 0 and start is not None:
+                try:
+                    obj = json.loads(raw[start:i + 1])
+                    if isinstance(obj, dict):
+                        out.append(obj)
+                except ValueError:
+                    pass
+                start = None
+    return out
+
+
 # ===================================================================== LLM ==
+class LLMBudgetExceeded(RuntimeError):
+    """Raised when a scan's provider time budget is spent.
+
+    The key is often shared with other tooling, so the quota can be
+    saturated when a scan starts. Rather than queueing behind that wall
+    forever, the scan gives up on further provider calls and falls back
+    to the offline analyst.
+    """
+
+
 class LLMBackend:
     name = "llm"
 
-    def _chat(self, system, user, max_tokens=1200):
-        resp = requests.post(
-            Config.LLM_BASE_URL.rstrip("/") + "/chat/completions",
-            headers={"Authorization": f"Bearer {Config.LLM_API_KEY}"},
-            json={
-                "model": Config.LLM_MODEL,
-                "messages": [
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
-                "max_tokens": max_tokens,
-                "temperature": 0.3,
-            },
-            timeout=45,
-        )
-        resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"]
+    # --- circuit breaker: a queued/dead endpoint must degrade fast --------
+    _fail_streak = 0
+    _open_until = 0.0
+    BREAKER_STREAK = 2          # consecutive exhausted calls to trip
+    BREAKER_COOLDOWN = 60.0     # seconds to stay open before retrying
 
-    def analyze_finding(self, finding):
+    def _tripped(self):
+        return time.time() < self._open_until
+
+    def __init__(self):
+        self._fail_streak = 0
+        self._open_until = 0.0
+        self._diag_lock = threading.Lock()
+        self._local = threading.local()
+        self.diag = {"calls": 0, "ok": 0, "http_429": 0, "http_5xx": 0,
+                     "timeouts": 0, "truncated": 0, "empty": 0,
+                     "breaker_skipped": 0, "unusable": 0, "salvaged": 0,
+                     "quota_pauses": 0, "budget_exceeded": 0}
+
+    def _record_failure(self):
+        self._fail_streak += 1
+        if self._fail_streak >= self.BREAKER_STREAK:
+            self._open_until = time.time() + self.BREAKER_COOLDOWN
+            self._fail_streak = 0
+
+    def _record_success(self):
+        self._fail_streak = 0
+        self._open_until = 0.0
+
+    # --- diagnostics -------------------------------------------------------
+    # One scan must tell the whole story: how many calls went out, how many
+    # were rate-limited, timed out, truncated or came back unusable. Exposed
+    # through the health endpoint and the scan summary so no extra probing
+    # (which would burn the same shared RPM quota) is ever needed.
+    def _diag(self, **kw):
+        with self._diag_lock:
+            for k, v in kw.items():
+                self.diag[k] = self.diag.get(k, 0) + v
+
+    def _diag_snapshot(self):
+        with self._diag_lock:
+            return dict(self.diag)
+
+    def _chat(self, system, user, max_tokens=1200, deadline=None):
+        """Single throttled choke point for every LLM call: respects the
+        provider RPM budget, retries 429/5xx with backoff (honoring
+        Retry-After), raises after the final attempt or when the circuit
+        breaker is open (endpoint queueing/dead).
+
+        `deadline` is a wall-clock cutoff for the scan that owns this
+        call. Past it the call is abandoned (LLMBudgetExceeded) instead
+        of queueing behind a saturated shared quota.
+        """
+        if self._tripped():
+            self._diag(breaker_skipped=1)
+            raise RuntimeError(
+                "LLM circuit breaker open (endpoint repeatedly timed out) — "
+                "using fallback analyst until cooldown")
+        payload = {
+            "model": Config.LLM_MODEL,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            "max_tokens": max_tokens,
+            "temperature": 0.3,
+        }
+        url = Config.LLM_BASE_URL.rstrip("/") + "/chat/completions"
+        headers = {"Authorization": f"Bearer {Config.LLM_API_KEY}"}
+        attempts = 4
+        timeouts = 0            # network timeouts get a tighter budget: a
+        rate_limited = 0        # 429s get one retry — the quota is shared,
+        last_error = None       # so hammering it only steals it from others
+        for attempt in range(attempts):
+            if deadline and time.time() > deadline:
+                # the scan's provider budget is spent — stop now
+                # instead of waiting out a saturated shared quota
+                self._diag(budget_exceeded=1)
+                raise LLMBudgetExceeded("scan LLM time budget exhausted")
+            get_limiter().acquire()
+            try:
+                with get_limiter().slot():
+                    if deadline and time.time() > deadline:
+                        # we queued for the slot while the budget ran out
+                        self._diag(budget_exceeded=1)
+                        raise LLMBudgetExceeded("scan LLM time budget exhausted")
+                    self._diag(calls=1)
+                    resp = requests.post(url, headers=headers, json=payload,
+                                         timeout=getattr(Config, "LLM_TIMEOUT", 60))
+            except requests.RequestException as exc:
+                last_error = exc
+                timeouts += 1
+                self._diag(timeouts=1)
+                if attempt == attempts - 1 or timeouts >= 2:
+                    self._record_failure()
+                    raise
+                time.sleep(min(2 ** attempt, 10))
+                continue
+            if resp.status_code == 429 or resp.status_code >= 500:
+                self._diag(http_429=1 if resp.status_code == 429 else 0,
+                           http_5xx=1 if resp.status_code >= 500 else 0)
+                last_error = requests.HTTPError(
+                    f"LLM endpoint returned HTTP {resp.status_code}", response=resp)
+                retry_after = resp.headers.get("Retry-After", "")
+                try:
+                    delay = float(retry_after)
+                except ValueError:
+                    delay = 2 ** (attempt + 1)
+                if resp.status_code == 429:
+                    # shared quota: park every worker, don't just this one.
+                    # Not a breaker trip — the endpoint is healthy, the
+                    # budget is simply spent; the pause is the remedy.
+                    rate_limited += 1
+                    if rate_limited >= 2:
+                        raise last_error
+                    delay = min(max(delay, 5.0), 60.0)
+                    get_limiter().pause(delay)
+                    self._diag(quota_pauses=1)
+                else:
+                    self._record_failure()
+                    if attempt == attempts - 1:
+                        raise last_error
+                time.sleep(min(max(delay, 1.0), 60.0))
+                continue
+            resp.raise_for_status()
+            self._record_success()
+            get_limiter().note_success()
+            body = resp.json()
+            choice = (body.get("choices") or [{}])[0]
+            msg = (choice.get("message") or {})
+            finish = choice.get("finish_reason")
+            # thinking-style models may leave `content` empty and stream
+            # their answer through reasoning_content — never return None
+            content = msg.get("content") or msg.get("reasoning_content") or ""
+            self._local.finish_reason = finish
+            self._local.content_len = len(msg.get("content") or "")
+            self._local.reasoning_len = len(msg.get("reasoning_content") or "")
+            if finish == "length":
+                self._diag(truncated=1)
+            elif not content.strip():
+                self._diag(empty=1)
+            else:
+                self._diag(ok=1)
+            return content
+        raise last_error or RuntimeError("LLM request failed")
+
+    def analyze_finding(self, finding, deadline=None):
         prompt = (
             "You are Sentinel AI, an autonomous security analyst. For the vulnerability "
             "below return STRICT JSON with keys: explanation (what happened, plain language), "
@@ -53,13 +347,17 @@ class LLMBackend:
                 "evidence": finding.get("evidence"),
             })
         )
-        raw = self._chat("Return only valid JSON, no markdown fences.", prompt)
-        try:
-            data = json.loads(re.sub(r"^```(json)?|```$", "", raw.strip(), flags=re.M))
-        except ValueError:
-            data = {"explanation": raw}
+        raw = self._chat(
+            "You are a JSON API. Do not think out loud, do not explain, do not use "
+            "markdown fences. Reply with ONLY the JSON object — the first character "
+            "of your reply must be '{'.",
+            prompt, max_tokens=3000, deadline=deadline)
+        data = _extract_json(raw, "object")
+        if data is None or not data.get("explanation"):
+            # chatty model failed to produce a payload -> clean offline fallback
+            raise ValueError("LLM reply contained no usable JSON")
         return {
-            "explanation": data.get("explanation", raw),
+            "explanation": data.get("explanation", ""),
             "root_cause": data.get("root_cause", ""),
             "fix_conceptual": data.get("fix_conceptual", ""),
             "fix_code": data.get("fix_code", ""),
@@ -70,7 +368,7 @@ class LLMBackend:
             },
         }
 
-    def summarize_scan(self, target, findings, scores):
+    def summarize_scan(self, target, findings, scores, deadline=None):
         prompt = (
             "Summarize this security scan for both a CTO and a junior developer. "
             "Return STRICT JSON: executive_summary (3-4 sentences), top_risks (list of 3 strings), "
@@ -78,17 +376,25 @@ class LLMBackend:
             + json.dumps({
                 "target": target,
                 "scores": scores,
+                # the executive summary needs the shape of the report, not
+                # every row — a long tail of findings bloats the prompt
+                # (and the reasoning model's answer) for no extra signal
                 "findings": [
                     {"title": f["title"], "severity": f["severity"], "endpoint": f["endpoint"]}
-                    for f in findings
+                    for f in findings[:25]
                 ],
             })
         )
-        raw = self._chat("Return only valid JSON, no markdown fences.", prompt)
-        try:
-            return json.loads(re.sub(r"^```(json)?|```$", "", raw.strip(), flags=re.M))
-        except ValueError:
-            return {"executive_summary": raw, "top_risks": [], "recommendations": []}
+        raw = self._chat(
+            "You are a JSON API. Do not think out loud, do not explain, do not use "
+            "markdown fences. Reply with ONLY the JSON object — the first character "
+            "of your reply must be '{'.",
+            prompt, max_tokens=2500, deadline=deadline)
+        data = _extract_json(raw, "object")
+        if data is None or not data.get("executive_summary"):
+            # unparseable reply -> clean offline summary instead of raw prose
+            raise ValueError("LLM reply contained no usable JSON")
+        return data
 
     def assistant_chat(self, question, context):
         return self._chat(
@@ -96,6 +402,50 @@ class LLMBackend:
             "code-level guidance when relevant. Context: " + json.dumps(context)[:3000],
             question,
         )
+
+    def verify_batch(self, items, deadline=None):
+        """Verification agent: re-review regex-flagged candidates in real
+        code context. `items` = [{id,title,category,severity,rule,line,
+        evidence,code}]. Returns a list of verdict dicts, or [] when the
+        model produced no usable payload (batch stays unverified)."""
+        prompt = (
+            "You are Sentinel AI's verification agent. A regex-based static scanner "
+            "flagged the candidate issues below in one or more source files. For EACH "
+            "item, read the code snippet provided with it and decide whether it is a "
+            "REAL, exploitable issue in THIS codebase — not test data, not a "
+            "docstring/comment example, not internal constants, not a safe or "
+            "unreachable pattern. Adjust severity if the context makes it more or "
+            "less severe.\n\n"
+            "Return STRICT JSON: a bare array, one object per input, each with keys:\n"
+            '  id, verdict ("confirmed" | "false_positive" | "uncertain"),\n'
+            "  severity (critical|high|medium|low — your adjusted rating),\n"
+            "  confidence (0-1), reasoning (max 2 sentences, cite the code),\n"
+            "  fix_conceptual (one sentence; empty for false positives),\n"
+            "  fix_code (short concrete corrected snippet; empty for false positives),\n"
+            "  lesson (one-sentence best practice; empty for false positives).\n\n"
+            "Keep every string short — the whole array must fit in one reply.\n\n"
+            + json.dumps(items)
+        )
+        raw = self._chat(
+            "You are a JSON API. Do not think out loud, do not explain, do not use "
+            "markdown fences. Reply with ONLY the JSON array — the first character "
+            "of your reply must be '['.",
+            prompt, max_tokens=4000, deadline=deadline)
+        data = _extract_json(raw, "array")
+        if data is None:  # tolerate {"results": [...]} wrappers
+            wrapped = _extract_json(raw, "object")
+            if isinstance(wrapped, dict):
+                data = wrapped.get("results") or wrapped.get("verdicts")
+        if not isinstance(data, list):
+            # reply was cut short (reasoning models love to over-think) —
+            # salvage the verdict objects that did make it through
+            data = _salvage_objects(raw)
+            if data:
+                self._diag(salvaged=1)
+        if not isinstance(data, list) or not data:
+            self._diag(unusable=1)
+            return []
+        return data
 
 
 # ===================================================== SentinelMind (KB) ===
@@ -373,7 +723,16 @@ class SentinelMindBackend:
 
     name = "sentinel-mind"
 
-    def analyze_finding(self, finding):
+    @property
+    def backend_name(self):
+        return self.name
+
+    @property
+    def diag(self):
+        """No provider calls happen here, so the ledger stays empty."""
+        return {}
+
+    def analyze_finding(self, finding, deadline=None):
         entry = KB.get(finding.get("category"), KB["error_handling"])
         return {
             "explanation": entry["explanation"],
@@ -383,7 +742,7 @@ class SentinelMindBackend:
             "learning": dict(entry["learning"]),
         }
 
-    def summarize_scan(self, target, findings, scores):
+    def summarize_scan(self, target, findings, scores, deadline=None):
         sev = {"critical": 0, "high": 0, "medium": 0, "low": 0}
         for f in findings:
             sev[f.get("severity", "low")] = sev.get(f.get("severity", "low"), 0) + 1
@@ -424,6 +783,10 @@ class SentinelMindBackend:
         return (f"{base}\nGeneral guidance: validate all inputs, enforce authorization on every "
                 "route, never trust client data, and add security headers globally.")
 
+    def verify_batch(self, items, deadline=None):
+        """Offline fallback: no code reasoning available, skip verification."""
+        return None
+
 
 class AILayer:
     """Facade selecting the best available backend; caches per finding."""
@@ -436,20 +799,27 @@ class AILayer:
     def backend_name(self):
         return self.backend.name
 
-    def analyze_finding(self, finding):
+    @property
+    def diag(self):
+        """Live call ledger for the active backend (empty for the offline one)."""
+        snap = getattr(self.backend, "_diag_snapshot", None)
+        return snap() if callable(snap) else {}
+
+    def analyze_finding(self, finding, deadline=None):
         key = finding.get("fingerprint") or finding.get("id")
         if key in self._cache:
             return self._cache[key]
         try:
-            result = self.backend.analyze_finding(finding)
+            result = self.backend.analyze_finding(finding, deadline=deadline)
         except Exception:
             result = SentinelMindBackend().analyze_finding(finding)
         self._cache[key] = result
         return result
 
-    def summarize_scan(self, target, findings, scores):
+    def summarize_scan(self, target, findings, scores, deadline=None):
         try:
-            return self.backend.summarize_scan(target, findings, scores)
+            return self.backend.summarize_scan(target, findings, scores,
+                                               deadline=deadline)
         except Exception:
             return SentinelMindBackend().summarize_scan(target, findings, scores)
 
@@ -458,6 +828,15 @@ class AILayer:
             return self.backend.assistant_chat(question, context)
         except Exception:
             return SentinelMindBackend().assistant_chat(question, context)
+
+    def verify_batch(self, items, deadline=None):
+        """Verification agent passthrough. Returns a verdict list, or None
+        when the provider call failed (timeout / rate limit) — an empty list
+        means the model answered but produced no usable verdict."""
+        try:
+            return self.backend.verify_batch(items, deadline=deadline)
+        except Exception:
+            return None
 
 
 _ai = AILayer()

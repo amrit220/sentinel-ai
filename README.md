@@ -50,16 +50,75 @@ The API-mode pipeline completes in ~20–40s; repo scans in ~10–60s
 ### Optional: connect a real LLM
 
 The AI layer works fully offline via **SentinelMind** (built-in rule-based analyst).
-To plug in any OpenAI-compatible LLM instead:
+To plug in any OpenAI-compatible LLM, edit the gitignored **`.env`** file in the
+project root (create it from the commented template if missing):
 
-```powershell
-$env:OPENAI_API_KEY = "sk-..."
-# optional overrides:
-# $env:SENTINEL_LLM_BASE_URL = "https://api.openai.com/v1"
-# $env:SENTINEL_LLM_MODEL    = "gpt-4o-mini"
+```ini
+# NVIDIA NIM example (OpenAI-compatible, free tier = 40 RPM).
+# Models on the free tier queue heavily — Sentinel's built-in rate limiter,
+# short retry budget and circuit breaker keep scans honest when they do.
+OPENAI_API_KEY=nvapi-...
+SENTINEL_LLM_BASE_URL=https://integrate.api.nvidia.com/v1
+SENTINEL_LLM_MODEL=minimaxai/minimax-m3.1-flash
 ```
 
-The active backend is shown in the dashboard sidebar (`AI: sentinel-mind` or `AI: llm`).
+```ini
+# OpenAI example
+OPENAI_API_KEY=sk-...
+# SENTINEL_LLM_BASE_URL defaults to https://api.openai.com/v1
+# SENTINEL_LLM_MODEL    defaults to gpt-4o-mini
+```
+
+Environment variables also work (`$env:OPENAI_API_KEY = "..."`) and win over
+the file. The active backend is shown in the dashboard sidebar
+(`AI: sentinel-mind` or `AI: llm`).
+
+#### AI verification agents (repo scans)
+
+With an LLM configured, repo scans gain a verification stage between the static
+sweep and scoring. Every static finding is re-reviewed **in real code context**
+(the agent reads the surrounding file):
+
+- **Confirmed** → severity re-rated by the agent, concrete fix code + lesson attached
+- **False positive** → downgraded to `info`, exploit flag cleared, and the agent's
+  reasoning is kept on the finding (nothing is silently dropped)
+- **Uncertain** → kept with honest confidence, flagged for human review
+
+Findings are batched per file (≈4 per call, ≤3 parallel calls, max 16 per scan,
+prioritized by severity). Fact-based categories (dependency CVEs, committed files)
+skip verification. Toggles: `SENTINEL_VERIFY=0` disables; `SENTINEL_VERIFY_MAX`,
+`SENTINEL_VERIFY_BATCH`, `SENTINEL_VERIFY_PARALLEL`, `SENTINEL_VERIFY_CONTEXT`
+tune the budget. Without a key, scans behave exactly as before (regex-only).
+
+Findings the agents confirmed already carry their own fix + lesson, so repo scans
+only enrich a couple of extra findings beyond that (`SENTINEL_REPO_ENRICH_MAX`,
+default 1) — a whole scan costs roughly six provider calls, not thirty.
+
+All LLM calls pass through a client-side sliding-window rate limiter
+(`SENTINEL_LLM_RPM`, default 28 — NVIDIA NIM's free tier allows 40 RPM and the
+key is commonly shared with other tooling), and 429/5xx responses are retried
+with backoff (honoring `Retry-After`). Every scan records a **call ledger**
+(`summary.llm_diag`, also exposed at `/api/health`) counting calls, rate limits,
+timeouts and truncated replies — so the behaviour of the provider is auditable
+without spending a single extra request on probing.
+
+> **The binding limit is concurrency, not RPM.** Measured on this key: four
+> simultaneous requests answer once and reject the other three with `429`. Every
+> provider call therefore passes through a concurrency gate
+> (`SENTINEL_LLM_CONCURRENCY`, default 1) — parallel workers queue for the
+> slot instead of colliding, and a single 429 parks every worker for a growing
+> cooldown instead of each one retrying into the same wall.
+
+> **Continuous monitoring is quota-free.** Monitor re-runs execute in *light*
+> mode: the finding set and its severities are what monitoring diffs, so a
+> background re-run makes **no provider calls at all** — it uses the offline
+> analyst for prose. Only an explicit scan spends the LLM budget.
+
+> **A scan always finishes.** Provider work inside one scan is bounded by a
+> wall-clock budget (`SENTINEL_LLM_BUDGET_S`, default 300s). Past it, the
+> remaining AI calls fall back to the free offline analyst instead of queueing
+> behind a saturated shared quota, and the scan summary reports
+> `llm_budget_spent: true`. A scan never hangs on someone else's quota.
 
 ---
 
@@ -161,6 +220,7 @@ SentinelAI/
 │       ├── attack_engine.py      # controlled attack suites + passive audits + attack paths
 │       ├── repo_engine.py        # static analysis: clone/local, rule packs, secrets, CI/Docker, OSV
 │       ├── vuln_engine.py        # classification, severity mapping, fingerprinting
+│       ├── verifier.py            # AI verification agents: confirm / dismiss static findings
 │       ├── perf_engine.py        # load testing, latency percentiles, verdicts
 │       ├── report_generator.py   # developer / client / JSON reports (self-contained HTML)
 │       ├── pipeline.py            # orchestrator: mode dispatch + shared scoring/AI tail

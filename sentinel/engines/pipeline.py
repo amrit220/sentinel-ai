@@ -14,16 +14,24 @@ Runs in a background thread; progress is written to the scans table so
 the dashboard can poll it.
 """
 import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 
 from config import Config
 from .. import database as db
 from .. import scoring
-from ..ai_layer import get_ai
-from . import scanner, attack_engine, vuln_engine, perf_engine, repo_engine
+from ..ai_layer import get_ai, SentinelMindBackend
+from . import scanner, attack_engine, vuln_engine, perf_engine, repo_engine, verifier
 
 
-def run_scan(scan_id):
-    """Entry point - executes a scan synchronously (call inside a thread)."""
+def run_scan(scan_id, light=False):
+    """Entry point - executes a scan synchronously (call inside a thread).
+
+    `light=True` runs the scan without any LLM traffic: the finding set and
+    its severities are what continuous monitoring diffs, not fresh prose for
+    every finding. Monitor re-runs use it so a background job never spends
+    the provider quota behind the user's back.
+    """
     scan = db.get_scan(scan_id)
     if not scan:
         return
@@ -38,16 +46,16 @@ def run_scan(scan_id):
 
     try:
         if cfg.get("mode", "api") == "repo":
-            _run_repo_mode(scan_id, scan, cfg)
+            _run_repo_mode(scan_id, scan, cfg, light=light)
         else:
-            _run_api_mode(scan_id, scan, cfg)
+            _run_api_mode(scan_id, scan, cfg, light=light)
     except Exception as exc:
         db.update_scan(scan_id, status="failed", stage="failed",
                        error=str(exc), finished_at=_now())
 
 
 # ================================================================= API mode =
-def _run_api_mode(scan_id, scan, cfg):
+def _run_api_mode(scan_id, scan, cfg, light=False):
     target = scan["target"]
     base_url = target if target.startswith("http") else "http://" + target
     modules = cfg.get("modules", {})
@@ -138,17 +146,36 @@ def _run_api_mode(scan_id, scan, cfg):
                        "discovery_mode": discovery_mode,
                        "attacks_simulated": len(attacks),
                    },
-                   latencies=lat, error_rate=err_rate)
+                   latencies=lat, error_rate=err_rate, light=light,
+                   deadline=time.time() + Config.LLM_BUDGET_S)
 
 
 # =============================================================== REPO mode =
-def _run_repo_mode(scan_id, scan, cfg):
+def _run_repo_mode(scan_id, scan, cfg, light=False):
     def cb(stage, pct):
         if stage:
             db.update_scan(scan_id, stage=stage, progress=pct)
 
     findings, meta = repo_engine.run_repo_scan(cfg, scan_id, cb)
     display = meta.get("display") or scan["target"]
+
+    # Wall-clock budget for this scan's provider work. The key is shared,
+    # so the quota can be saturated; a scan must still finish on time.
+    deadline = time.time() + Config.LLM_BUDGET_S
+
+    # AI verification agents: re-review every static finding in real code
+    # context — dismiss false positives, confirm real issues, attach fixes.
+    # Returns stats=None when no LLM is configured (plain regex behavior).
+    # Light runs (continuous monitoring) skip the agents entirely: the point
+    # of a re-run is the finding diff, and it must not spend provider quota.
+    if light:
+        verification_stats = None
+    else:
+        findings, verification_stats = verifier.verify_findings(
+            findings, meta.get("repo_path"), get_ai(),
+            progress_cb=lambda stage, pct: db.update_scan(
+                scan_id, stage=stage, progress=pct or 78),
+            deadline=deadline)
 
     # optional experimental runtime sandbox --------------------------------
     if cfg.get("repo_modules", {}).get("runtime", False):
@@ -181,9 +208,11 @@ def _run_repo_mode(scan_id, scan, cfg):
                        "text_files_analyzed": meta.get("text_files"),
                        "lines_of_code": meta.get("loc"),
                        "languages": meta.get("languages"),
+                       "verification": verification_stats,
                        "mode": "repo",
                    },
-                   latencies=None, error_rate=None)
+                   latencies=None, error_rate=None, light=light,
+                   deadline=deadline)
 
 
 # ================================================================ shared ==
@@ -192,13 +221,29 @@ _HYGIENE_CATS = {"debug_prod", "weak_crypto", "cors_wildcard", "docker_risk",
 
 
 def _finalize_scan(scan_id, scan, findings, test_results, perf_report,
-                   extra_summary, latencies, error_rate):
-    """Persist findings, AI-enrich, score, summarize, alert. Shared by modes."""
+                   extra_summary, latencies, error_rate, light=False,
+                   deadline=None):
+    """Persist findings, AI-enrich, score, summarize, alert. Shared by modes.
+
+    `light=True` (continuous-monitoring re-runs) skips every provider call:
+    the offline analyst fills in the prose so the diff stays meaningful
+    without spending the user's LLM quota in the background.
+
+    `deadline` is the wall-clock cutoff for this scan's provider work. Past
+    it every remaining AI call falls back to the free offline analyst, so a
+    scan always finishes — even when the shared quota is saturated.
+    """
     is_repo = extra_summary.get("mode") == "repo"
 
     # persistence + AI enrichment -------------------------------------------
     db.update_scan(scan_id, stage="AI analysis", progress=88)
     ai = get_ai()
+    offline = SentinelMindBackend()
+    if light:
+        ai = offline
+    elif deadline is None:
+        deadline = time.time() + Config.LLM_BUDGET_S
+    diag_before = dict(ai.diag or {})
     finding_ids = []
     for f in findings:
         fid = db.add_finding(scan_id, f)
@@ -207,14 +252,43 @@ def _finalize_scan(scan_id, scan, findings, test_results, perf_report,
     enriched = list(findings)
     order = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
     enriched.sort(key=lambda x: order.get(x.get("severity"), 5))
-    for fid, f in finding_ids[:10]:
-        analysis = ai.analyze_finding(f)
-        f["ai_analysis"] = analysis
-        db.update_finding(fid,
-                          ai_explanation=analysis.get("explanation"),
-                          ai_fix=analysis.get("fix_conceptual"),
-                          ai_learning=analysis.get("learning"),
-                          ai_fix_code=analysis.get("fix_code"))
+
+    # findings already carry verification-agent output -> persist it verbatim;
+    # the rest get the standard backend enrichment (top 10 by insertion order)
+    needs_analysis = []
+    for fid, f in finding_ids:
+        pre = f.get("ai_analysis")
+        if pre:
+            db.update_finding(fid,
+                              ai_explanation=pre.get("explanation"),
+                              ai_fix=pre.get("fix_conceptual"),
+                              ai_learning=pre.get("learning"),
+                              ai_fix_code=pre.get("fix_code"))
+        else:
+            needs_analysis.append((fid, f))
+    # Repo scans already ran the (costlier, context-aware) verification agents,
+    # which attach their own fix + lesson. Enriching every remaining finding on
+    # top of that burns the provider quota for little extra signal — so repo
+    # mode only enriches the handful of findings nothing else has covered.
+    enrich_budget = Config.REPO_ENRICH_MAX if is_repo else 10
+    if needs_analysis:
+        # parallel enrichment (LLM calls dominate; the global RPM limiter
+        # keeps the provider quota respected across workers)
+        def _enrich(item):
+            fid, f = item
+            try:
+                return fid, f, ai.analyze_finding(f, deadline=deadline)
+            except Exception:
+                # quota spent / provider hiccup -> free, deterministic prose
+                return fid, f, offline.analyze_finding(f)
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            for fid, f, analysis in pool.map(_enrich, needs_analysis[:enrich_budget]):
+                f["ai_analysis"] = analysis
+                db.update_finding(fid,
+                                  ai_explanation=analysis.get("explanation"),
+                                  ai_fix=analysis.get("fix_conceptual"),
+                                  ai_learning=analysis.get("learning"),
+                                  ai_fix_code=analysis.get("fix_code"))
 
     # scoring ------------------------------------------------------------------
     db.update_scan(scan_id, stage="scoring", progress=92)
@@ -231,11 +305,17 @@ def _finalize_scan(scan_id, scan, findings, test_results, perf_report,
         ovr = scoring.overall(sec, perf, qual)
 
     # AI summary ------------------------------------------------------------------
-    ai_summary = ai.summarize_scan(scan["target"], enriched, {
+    summary_scores = {
         "overall": ovr, "security": sec,
         "performance": perf if perf is not None else "not measured (static analysis)",
         "quality": qual,
-    })
+    }
+    try:
+        ai_summary = ai.summarize_scan(scan["target"], enriched,
+                                        summary_scores, deadline=deadline)
+    except Exception:
+        ai_summary = offline.summarize_scan(scan["target"], enriched,
+                                           summary_scores)
 
     counts = vuln_engine.severity_counts(findings)
     passed = sum(1 for t in test_results if t.get("status") == "pass")
@@ -253,6 +333,13 @@ def _finalize_scan(scan_id, scan, findings, test_results, perf_report,
         "performance": perf_report,
         "ai_summary": ai_summary,
         "ai_backend": ai.backend_name,
+        # call ledger for this scan — shows rate limits, timeouts and
+        # truncation without needing a single extra provider request
+        "llm_diag": ai.diag,
+        # true when the provider time budget ran out mid-scan and the
+        # remaining AI work fell back to the offline analyst
+        "llm_budget_spent": (ai.diag.get("budget_exceeded", 0)
+                               > diag_before.get("budget_exceeded", 0)),
         "mode": "repo" if is_repo else "api",
     }
     summary.update(extra_summary)

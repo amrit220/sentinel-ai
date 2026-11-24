@@ -14,8 +14,8 @@ from config import REPORT_DIR
 from .. import scoring
 
 _CSS = """
-:root{--bg:#0a0e14;--card:#101623;--ink:#e6edf3;--dim:#8b95a5;--acc:#00e5a0;
---crit:#ff3b5c;--high:#ff8b3d;--med:#ffd23d;--low:#4dd8ff;--border:#1c2738}
+:root{--bg:#0b0b0d;--card:#121214;--ink:#f4f5f7;--dim:#9d9da6;--acc:#34d399;
+--crit:#f87171;--high:#fb923c;--med:#fbbf24;--low:#38bdf8;--border:#222227}
 *{box-sizing:border-box;margin:0;padding:0}
 body{font:14px/1.6 'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--ink);padding:40px 20px}
 .wrap{max-width:1000px;margin:0 auto}
@@ -29,8 +29,8 @@ table{width:100%;border-collapse:collapse;font-size:13px}
 th{color:var(--dim);text-align:left;padding:8px;border-bottom:1px solid var(--border)}
 td{padding:8px;border-bottom:1px solid var(--border);vertical-align:top}
 .sev{font-weight:600;padding:2px 10px;border-radius:20px;font-size:12px}
-.critical{background:#ff3b5c22;color:var(--crit)}.high{background:#ff8b3d22;color:var(--high)}
-.medium{background:#ffd23d22;color:var(--med)}.low{background:#4dd8b322;color:var(--low)}
+.critical{background:#f8717122;color:var(--crit)}.high{background:#fb923c22;color:var(--high)}
+.medium{background:#fbbf2422;color:var(--med)}.low{background:#38bdf822;color:var(--low)}
 pre{background:#070a10;border:1px solid var(--border);border-radius:8px;padding:12px;overflow:auto;font-size:12px;color:#9fe8c9}
 .tag{display:inline-block;background:#1c2738;padding:2px 10px;border-radius:6px;font-size:12px;margin:2px 4px 2px 0}
 code{background:#1c2738;padding:1px 5px;border-radius:4px;font-size:12px}
@@ -71,10 +71,10 @@ def _score_cards(summary):
 
 
 def _score_color(v):
-    if v >= 80: return "#00e5a0"
-    if v >= 60: return "#4dd8ff"
-    if v >= 40: return "#ffd23d"
-    return "#ff3b5c"
+    if v >= 80: return "#34d399"
+    if v >= 60: return "#38bdf8"
+    if v >= 40: return "#fbbf24"
+    return "#f87171"
 
 
 def _sev_span(sev):

@@ -41,7 +41,9 @@ class MonitorManager:
                 if not scan:
                     continue
                 before = db.finding_fingerprints(mon["scan_id"])
-                pipeline.run_scan(mon["scan_id"])
+                # light=True: a re-run exists to diff findings, so it must
+                # not spend the provider's quota behind the user's back.
+                pipeline.run_scan(mon["scan_id"], light=True)
                 after = db.finding_fingerprints(mon["scan_id"])
                 new = [fp for fp in after if fp not in before]
                 upgraded = [fp for fp, sev in after.items()

@@ -70,7 +70,7 @@ def run():
         check("drawer opens", pg.locator(".sidebar.open").count() == 1)
         check("backdrop visible", pg.locator(".sidebar-backdrop.show").is_visible())
         pg.screenshot(path=str(ART / "responsive-phone-drawer.png"))
-        pg.get_by_role("link", name="📄 Reports").click()
+        pg.locator('.nav-item[data-nav="reports"]').click()
         pg.wait_for_timeout(600)
         check("drawer closes after nav", pg.locator(".sidebar.open").count() == 0)
         check("reports page reached", pg.locator("#pageTitle").inner_text() == "Reports")
@@ -100,7 +100,7 @@ def run():
         ctx.goto(BASE, wait_until="networkidle")
         ctx.locator(".hamburger").click()          # open drawer first at 390px
         ctx.wait_for_timeout(350)
-        ctx.get_by_role("link", name="🎓 Learning").click()
+        ctx.locator('.nav-item[data-nav="learn"]').click()
         ctx.wait_for_timeout(600)
         check("no horizontal overflow (learning)", no_overflow(ctx))
         ctx.screenshot(path=str(ART / "responsive-phone-learning.png"))

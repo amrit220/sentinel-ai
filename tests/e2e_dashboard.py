@@ -51,9 +51,9 @@ def run():
 
         # ---------------------------------------------------- 2. new scan
         print("[2] opening New Scan ...")
-        page.get_by_role("link", name="⚡ New Scan").click()
+        page.get_by_role("link", name="New Scan").click()
         expect(page.get_by_role("heading", name="New Scan")).to_be_visible()
-        page.get_by_role("button", name="⚡ Use bundled demo target").click()
+        page.get_by_role("button", name="Use bundled demo target").click()
         value = page.locator("#scTarget").input_value()
         assert value == "http://127.0.0.1:5099", f"demo button filled wrong value: {value}"
         print("    demo target filled:", value)
@@ -61,12 +61,13 @@ def run():
 
         # ---------------------------------------------------- 3. launch scan
         print("[3] launching scan ...")
-        page.get_by_role("button", name="▶ Launch scan").click()
+        page.get_by_role("button", name="Launch scan").click()
         expect(page.locator("#scProgress .progress")).to_be_visible(timeout=10000)
         print("    pipeline started, polling progress ...")
 
-        # watch live progress until completed (max 120s)
-        deadline = time.time() + 120
+        # watch live progress until completed — real-LLM analysis tails can
+        # take several minutes (free-tier inference ~45-90s per call)
+        deadline = time.time() + 600
         last_stage = ""
         while time.time() < deadline:
             status = page.locator("#scProgress .sev").inner_text()
@@ -96,7 +97,7 @@ def run():
         expect(page.locator(".finding-body").first).to_be_visible()
         shot(page, "05-finding-open")
 
-        replay_btn = page.locator(".finding.open").get_by_role("button", name="⏯ Attack replay")
+        replay_btn = page.locator(".finding.open").get_by_role("button", name="Attack replay")
         if replay_btn.count():
             replay_btn.first.click()
             expect(page.locator(".modal-card .attack-steps")).to_be_visible()
@@ -107,10 +108,10 @@ def run():
 
         # ---------------------------------------------------- 6. reports page
         print("[6] checking reports + learning pages ...")
-        page.get_by_role("link", name="📄 Reports").click()
+        page.locator('.nav-item[data-nav="reports"]').click()
         expect(page.locator('a[href*="report?format=developer"]').first).to_be_visible()
         print("    reports page OK")
-        page.get_by_role("link", name="🎓 Learning").click()
+        page.locator('.nav-item[data-nav="learn"]').click()
         page.wait_for_timeout(1200)
         print("    learning page OK")
         shot(page, "07-learning")

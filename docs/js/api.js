@@ -19,4 +19,4 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g,
 const fmtTime = (ts) => ts ? new Date(ts * 1000).toLocaleString() : '—';
 
 const SEV_ORDER = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
-const SEV_COLOR = { critical: '#ff3b5c', high: '#ff8b3d', medium: '#ffd23d', low: '#4dd8ff', info: '#8b95a5' };
+const SEV_COLOR = { critical: '#f87171', high: '#fb923c', medium: '#fbbf24', low: '#38bdf8', info: '#94a3b8' };

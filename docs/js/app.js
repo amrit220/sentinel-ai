@@ -201,9 +201,9 @@ async function pageScan(_arg, view) {
     <div class="card">
       <h2 class="sect" style="margin-top:0">Scan type</h2>
       <div class="row mb" style="gap:8px">
-        <button class="btn small" id="mtApi" onclick="setScanMode('api')">⚡ API Target</button>
-        <button class="btn small" id="mtGh" onclick="setScanMode('github')">🐙 GitHub Repo</button>
-        <button class="btn small" id="mtLc" onclick="setScanMode('local')">📁 Local Folder</button>
+        <button class="btn small" id="mtApi" onclick="setScanMode('api')">API Target</button>
+        <button class="btn small" id="mtGh" onclick="setScanMode('github')">GitHub Repo</button>
+        <button class="btn small" id="mtLc" onclick="setScanMode('local')">Local Folder</button>
       </div>
 
       <div id="apiFields">
@@ -212,7 +212,7 @@ async function pageScan(_arg, view) {
           <input type="text" id="scTarget" placeholder="https://api.example.com">
         </div>
         <div class="row mb">
-          <button class="btn small" onclick="useDemo()">⚡ Use bundled demo target</button>
+          <button class="btn small" onclick="useDemo()">Use bundled demo target</button>
           <span class="muted small">launches full detection pipeline vs. demo</span>
         </div>
         <div class="field">
@@ -250,12 +250,12 @@ async function pageScan(_arg, view) {
         <div style="display:flex;flex-direction:column;gap:8px">
           <label class="ck"><input type="checkbox" checked disabled> Language rule packs — SQLi, XSS, eval, secrets, weak crypto, TLS-off, CI/Docker</label>
           <label class="ck"><input type="checkbox" id="rDeps" checked> Dependency CVE audit (OSV.dev)</label>
-          <label class="ck"><input type="checkbox" id="rRuntime"> ⚠ Runtime sandbox (EXPERIMENTAL — needs Docker; builds & runs the repo, then attacks it)</label>
+          <label class="ck"><input type="checkbox" id="rRuntime"> Runtime sandbox (EXPERIMENTAL — needs Docker; builds & runs the repo, then attacks it)</label>
         </div>
         <div class="muted small mt" id="repoNote">The project is analyzed statically — its code is never executed.</div>
       </div>
 
-      <button class="btn primary mt" id="scStart" onclick="startScan()">▶ Launch scan</button>
+      <button class="btn primary mt" id="scStart" onclick="startScan()">Launch scan</button>
     </div>
 
     <div class="card">
@@ -349,7 +349,7 @@ async function startScan() {
     const r = await API.post('/api/scans', body);
     UI.toast('Scan launched');
     pollScanProgress(r.scan_id);
-  } catch (e) { UI.toast(e.message, true); btn.disabled = false; btn.textContent = '▶ Launch scan'; }
+  } catch (e) { UI.toast(e.message, true); btn.disabled = false; btn.textContent = 'Launch scan'; }
 }
 
 /** Poll scan status ~1x/sec until it completes or fails, rendering a live
@@ -507,14 +507,14 @@ function findingCard(f, i) {
       ${ai.fix_conceptual || f.ai_fix ? `<div class="kv"><b>Fix</b><br>${esc(ai.fix_conceptual || f.ai_fix)}</div>` : ''}
       ${code ? `<div class="kv"><b>Suggested code</b><pre class="code">${esc(code)}</pre></div>` : ''}
       ${learning.mistake ? `
-        <div class="kv"><b>🎓 Learning mode</b>
+        <div class="kv"><b>Learning mode</b>
           <div class="mt small"><b>Mistake made:</b> ${esc(learning.mistake)}</div>
           <div class="small"><b>Best practice:</b> ${esc(learning.best_practice)}</div>
           <div class="small"><b>Why it matters:</b> ${esc(learning.why)}</div></div>` : ''}
       <div class="row mt">
-        ${f.attack_path?.length ? `<button class="btn small" onclick="UI.replay('${f.id}', ${i})">${isStatic ? '⌕ Code trace' : '⏯ Attack replay'}</button>` : ''}
-        <button class="btn small" onclick="UI.deepAnalyze('${f.id}')">🤖 Analyze with AI</button>
-        <button class="btn small" onclick="UI.askAI('${f.id}')">💬 Debug assistant</button>
+        ${f.attack_path?.length ? `<button class="btn small" onclick="UI.replay('${f.id}', ${i})">${isStatic ? 'Code trace' : 'Attack replay'}</button>` : ''}
+        <button class="btn small" onclick="UI.deepAnalyze('${f.id}')">Analyze with AI</button>
+        <button class="btn small" onclick="UI.askAI('${f.id}')">Debug assistant</button>
       </div>
     </div>
   </div>`;
@@ -528,7 +528,7 @@ UI.replay = function (fid, i) {
   const isStatic = f.method === 'STATIC';
   const req = f.request || {};
   UI.openModal(`
-    <h2 style="margin-bottom:4px">${isStatic ? '⌕ Code trace' : '⏯ Attack replay'} — ${esc(f.title)}</h2>
+    <h2 style="margin-bottom:4px">${isStatic ? 'Code trace' : 'Attack replay'} — ${esc(f.title)}</h2>
     <div class="muted small mb">${isStatic ? 'how this code flaw was identified' : 'step-by-step reconstruction of the simulated exploit'}</div>
     <div class="card tight mb"><b>Request</b>
       <pre class="code">${esc(req.method || 'GET')} ${esc(req.url || '')}
@@ -568,7 +568,7 @@ UI.deepAnalyze = async function (fid) {
 UI.askAI = function (fid) {
   const f = CURRENT_SCAN.findings.find(x => x.id === fid);
   UI.openModal(`
-    <h2 style="margin-bottom:12px">💬 Sentinel Debug Assistant</h2>
+    <h2 style="margin-bottom:12px">Sentinel Debug Assistant</h2>
     <div class="chat-log" id="chatLog"></div>
     <div class="row">
       <input type="text" id="chatIn" placeholder="Ask why this happened, or how to fix it…"
@@ -636,9 +636,9 @@ async function pageReports(_arg, view) {
               overall score ${s.summary?.scores?.overall ?? '—'}</div>
           </div>
           <div class="row">
-            <a class="btn small" href="/api/scans/${s.id}/report?format=developer" target="_blank">⬇ Developer (HTML)</a>
-            <a class="btn small" href="/api/scans/${s.id}/report?format=client" target="_blank">⬇ Client (HTML)</a>
-            <a class="btn small" href="/api/scans/${s.id}/report?format=json" target="_blank">⬇ JSON</a>
+            <a class="btn small" href="/api/scans/${s.id}/report?format=developer" target="_blank">Developer (HTML)</a>
+            <a class="btn small" href="/api/scans/${s.id}/report?format=client" target="_blank">Client (HTML)</a>
+            <a class="btn small" href="/api/scans/${s.id}/report?format=json" target="_blank">JSON</a>
           </div>
         </div>
       </div>`).join('') : '<div class="empty">Complete a scan first to generate reports.</div>'}`;
@@ -718,9 +718,9 @@ async function pageLearn(_arg, view) {
       <div class="card">
         <div class="row spread"><h3>${esc(c.title)}</h3>
           <span class="sev ${c.f.severity}">${c.f.severity}</span></div>
-        <div class="mt"><b>❌ The mistake</b><p class="muted">${esc(c.learning.mistake || '—')}</p></div>
-        <div class="mt"><b>✅ Best practice</b><p class="muted">${esc(c.learning.best_practice || '—')}</p></div>
-        <div class="mt"><b>💡 Why it matters</b><p class="muted">${esc(c.learning.why || '—')}</p></div>
+        <div class="mt"><b>The mistake</b><p class="muted">${esc(c.learning.mistake || '—')}</p></div>
+        <div class="mt"><b>Best practice</b><p class="muted">${esc(c.learning.best_practice || '—')}</p></div>
+        <div class="mt"><b>Why it matters</b><p class="muted">${esc(c.learning.why || '—')}</p></div>
       </div>`).join('')
     : '<div class="empty">Run a scan — every finding will automatically get a lesson here.</div>'}`;
 }

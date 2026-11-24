@@ -32,25 +32,27 @@ def run():
 
         # ------------------------------------------------ scan type tabs
         print("[repo mode e2e]")
-        pg.get_by_role("link", name="⚡ New Scan").click()
-        pg.get_by_role("button", name="🐙 GitHub Repo").click()
+        pg.get_by_role("link", name="New Scan").click()
+        pg.get_by_role("button", name="GitHub Repo").click()
         check("github tab shows URL field", pg.locator("#scRepoUrl").is_visible())
-        pg.get_by_role("button", name="📁 Local Folder").click()
+        pg.get_by_role("button", name="Local Folder").click()
         check("local tab shows path field", pg.locator("#scLocalPath").is_visible())
-        pg.get_by_role("button", name="⚡ API Target").click()
+        pg.get_by_role("button", name="API Target").click()
         check("api tab restores target field", pg.locator("#scTarget").is_visible())
-        pg.get_by_role("button", name="📁 Local Folder").click()
+        pg.get_by_role("button", name="Local Folder").click()
 
         # ------------------------------------------------ launch scan
         print(f"    scanning fixture: {FIXTURE}")
         pg.locator("#scLocalPath").fill(FIXTURE)
-        pg.get_by_role("button", name="▶ Launch scan").click()
+        pg.get_by_role("button", name="Launch scan").click()
         pg.wait_for_timeout(1500)
         expect_running = pg.locator("#scProgress .sev").count() > 0
         check("pipeline started", expect_running)
 
         import time
-        deadline, status = time.time() + 180, ""
+        # static analysis + AI verification agents (one LLM batch per group)
+        # run against the real model — free-tier inference is ~45-90s per call.
+        deadline, status = time.time() + 600, ""
         while time.time() < deadline:
             status = pg.locator("#scProgress .sev").inner_text().lower()
             if status in ("completed", "failed"):
@@ -83,7 +85,7 @@ def run():
         # ------------------------------------------------ code trace modal
         pg.locator(".finding-head").first.click()
         pg.wait_for_timeout(300)
-        btn = pg.locator(".finding.open").get_by_role("button", name="⌕ Code trace")
+        btn = pg.locator(".finding.open").get_by_role("button", name="Code trace")
         if btn.count():
             btn.first.click()
             steps = pg.locator(".modal-card .attack-step").count()
@@ -92,7 +94,7 @@ def run():
             pg.locator(".modal-x").click()
 
         # ------------------------------------------------ dashboard switcher
-        pg.get_by_role("link", name="■ Dashboard").click()
+        pg.get_by_role("link", name="Dashboard").click()
         pg.wait_for_timeout(1500)
         sel = pg.locator("#dashScanSel")
         check("dashboard scan switcher visible", sel.count() == 1)

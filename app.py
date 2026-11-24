@@ -36,6 +36,9 @@ def health():
     return jsonify({
         "service": "sentinel-ai", "version": "1.0.0",
         "ai_backend": _ai.backend_name, "demo_target": Config.DEMO_TARGET_URL,
+        # live LLM call ledger — lets you audit quota/timeout behaviour
+        # without firing a single extra request
+        "llm_diag": _ai.diag,
     })
 
 
@@ -103,10 +106,12 @@ def api_get_findings(scan_id):
     findings = db.get_findings(scan_id)
     for f in findings:
         # attach lazily-stored AI data in a tidy shape for the UI
-        if f.get("ai_learning"):
+        if f.get("ai_learning") or f.get("ai_explanation") or f.get("ai_fix") \
+                or f.get("ai_fix_code"):
             f["ai_analysis"] = {
                 "explanation": f.get("ai_explanation"),
                 "fix_conceptual": f.get("ai_fix"),
+                "fix_code": f.get("ai_fix_code"),
                 "learning": f.get("ai_learning"),
             }
     return jsonify({"findings": findings, "counts": (scan.get("summary") or {}).get("counts", {})})

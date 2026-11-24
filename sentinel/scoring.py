@@ -10,11 +10,11 @@ import math
 from config import SEVERITY_WEIGHTS
 
 RISK_COLORS = {
-    "critical": "#ff3b5c",
-    "high":     "#ff8b3d",
-    "medium":   "#ffd23d",
-    "low":      "#4dd8ff",
-    "info":     "#8b95a5",
+    "critical": "#f87171",
+    "high":     "#fb923c",
+    "medium":   "#fbbf24",
+    "low":      "#38bdf8",
+    "info":     "#94a3b8",
 }
 
 

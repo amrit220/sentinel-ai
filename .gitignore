@@ -19,5 +19,9 @@ Thumbs.db
 .idea/
 .vscode/
 
+# Local secrets/config (root only — tests/fixture_repo/.env stays tracked
+# on purpose: it's a planted flaw for the repo-scan e2e suite)
+/.env
+
 sentinel_demo.db
 opencode.json
